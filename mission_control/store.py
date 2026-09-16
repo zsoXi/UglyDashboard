@@ -1,35 +1,20 @@
 """Private observer SQLite store and local secret management."""
-import argparse
-import base64
-import copy
-import csv
-import hashlib
-import hmac
-import html
-import io
-import ipaddress
+
 import json
-import logging
-import math
 import os
-import re
 import secrets
 import sqlite3
-import subprocess
 import sys
 import threading
 import time
-import webbrowser
-from collections import Counter, defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path, PureWindowsPath
-from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, quote, urlencode, urlparse, unquote
-from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
-from .core import *  # noqa: F401,F403
+from pathlib import Path
+
+from .core import (
+    SECRET_RE,
+    now_ms,
+    path_key,
+)
+from .locking import secret_lock
 
 
 class SecretError(RuntimeError):
@@ -38,14 +23,16 @@ class SecretError(RuntimeError):
     Carries the offending path and a machine-readable ``reason`` so callers can
     present a readable diagnostic instead of silently rotating credentials.
     """
+
     def __init__(self, path, reason):
         self.path = Path(path)
         self.reason = reason
-        super().__init__(f'{reason}: {self.path}')
+        super().__init__(f"{reason}: {self.path}")
 
 
 class Store:
     """Private observer database. Never reuses the OpenCode/Codex source DB."""
+
     def __init__(self, directory):
         self.directory = Path(directory).expanduser().resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -53,12 +40,12 @@ class Store:
             self.directory.chmod(0o700)
         except OSError:
             pass
-        self.path = self.directory / 'observer.sqlite'
+        self.path = self.directory / "observer.sqlite"
         self.lock = threading.RLock()
         self._closed = False
         self.con = sqlite3.connect(self.path, check_same_thread=False, timeout=5)
         self.con.row_factory = sqlite3.Row
-        self.con.executescript('''
+        self.con.executescript("""
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS event(seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
                 ts INTEGER NOT NULL, session_id TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL);
@@ -68,84 +55,40 @@ class Store:
             CREATE TABLE IF NOT EXISTS report(id TEXT PRIMARY KEY, ts INTEGER NOT NULL, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS assessment(session_id TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS oauth_client(id TEXT PRIMARY KEY, data TEXT NOT NULL);
-        ''')
+        """)
         self.con.commit()
 
     def secret(self, name, repair=False):
-        """Return a stable local secret, creating it once if absent.
+        """Read/create a stable credential; repair corrupt content only explicitly.
 
-        Recovery is explicit and fail-closed:
-
-        * a file that cannot be read (permissions, locking, I/O) raises
-          :class:`SecretError` and is never touched, even with ``repair=True``;
-        * a file whose content is empty/truncated/corrupt raises
-          :class:`SecretError` unless ``repair=True``, in which case it is
-          atomically moved to ``<name>.corrupt-<ts>-<rand>.bak`` before a fresh
-          secret is generated. If the file cannot be moved, the original is left
-          in place and an error is raised. Credentials are never silently
-          rotated or deleted.
-
-        Creation and repair are serialised across threads and processes with an
-        exclusive lock file, and the decision is re-checked after acquiring it.
-        A process that loses the race therefore reads the winner's secret instead
-        of quarantining it.
+        Every decision is taken under the same persistent advisory lock. In
+        particular, a missing-file observation must never be combined with a
+        later exists() check to falsely diagnose a concurrent creation as corrupt.
+        Permission/I/O failures leave credentials untouched. No stale-lock unlink.
         """
+        if (
+            not isinstance(name, str)
+            or not name
+            or name in (".", "..")
+            or "/" in name
+            or chr(92) in name
+        ):
+            raise ValueError("Secret name must be a plain filename")
         p = self.directory / name
-        value = self._read_if_present(p)
-        if value is not None:
-            return value
-        if p.exists() and not repair:
-            raise SecretError(p, 'secret file is empty, truncated or corrupt')
-        fd, lock_path = self._acquire_secret_lock(name)
         try:
-            # Re-check under the lock: another process may have just repaired it.
-            value = self._read_if_present(p)
-            if value is not None:
-                return value
-            if p.exists():
-                if not repair:
-                    raise SecretError(p, 'secret file is empty, truncated or corrupt')
-                self._quarantine_secret(p)
-            return self._create_secret(p)
-        finally:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            try:
-                os.unlink(str(lock_path))
-            except OSError:
-                pass
-
-    def _read_if_present(self, p):
-        if not p.exists():
-            return None
-        return self._read_secret(p)
-
-    def _acquire_secret_lock(self, name, timeout=10.0, poll=0.02):
-        """Exclusive cross-process lock for creating/repairing one secret."""
-        lock_path = self.directory / (name + '.lock')
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                try:
-                    os.write(fd, f'{os.getpid()} {int(time.time())}'.encode())
-                except OSError:
-                    pass
-                return fd, lock_path
-            except FileExistsError:
-                try:
-                    if time.time() - os.stat(str(lock_path)).st_mtime > 30:
-                        os.unlink(str(lock_path))
-                        continue
-                except OSError:
-                    pass
-                if time.monotonic() >= deadline:
-                    raise SecretError(lock_path, 'timed out waiting for another secret repair to finish')
-                time.sleep(poll)
-            except OSError as exc:
-                raise SecretError(lock_path, f'cannot create secret lock ({exc.strerror or exc})') from exc
+            with secret_lock(p.with_name(name + ".lock")):
+                if p.exists():
+                    value = self._read_secret(p)
+                    if value is not None:
+                        return value
+                    if not repair:
+                        raise SecretError(p, "secret file is empty, truncated or corrupt")
+                    self._quarantine_secret(p)
+                return self._create_secret(p)
+        except SecretError:
+            raise
+        except OSError as exc:
+            raise SecretError(p, f"credential transaction failed ({exc})") from exc
 
     @staticmethod
     def _read_secret(p):
@@ -156,45 +99,55 @@ class Store:
         rotation that could hide the underlying problem.
         """
         try:
-            raw = p.read_text('utf-8')
+            raw = p.read_text("utf-8")
         except UnicodeDecodeError:
             return None
         except OSError as exc:
-            raise SecretError(p, f'secret file is unreadable ({exc.strerror or exc})') from exc
+            raise SecretError(p, f"secret file is unreadable ({exc.strerror or exc})") from exc
         value = raw.strip()
         return value if SECRET_RE.match(value) else None
 
     def _quarantine_secret(self, p):
-        """Atomically move a damaged secret aside; never delete or overwrite."""
-        stamp = time.strftime('%Y%m%d-%H%M%S')
+        """Preserve corrupt bytes without clobbering an existing backup.
+
+        Windows rename refuses an existing destination. POSIX uses a no-clobber
+        hardlink followed by unlink, while the credential lock remains held. A
+        crash between those operations leaves BOTH copies recoverable.
+        """
+        stamp = time.strftime("%Y%m%d-%H%M%S")
         for _ in range(64):
-            backup = p.with_name(f'{p.name}.corrupt-{stamp}-{secrets.token_hex(4)}.bak')
+            backup = p.with_name(f"{p.name}.corrupt-{stamp}-{secrets.token_hex(4)}.bak")
             try:
-                os.replace(str(p), str(backup))
+                if sys.platform == "win32":
+                    os.rename(str(p), str(backup))
+                else:
+                    os.link(str(p), str(backup))
+                    p.unlink()
                 return backup
             except FileExistsError:
                 continue
             except OSError as exc:
                 raise SecretError(
-                    p, f'cannot quarantine corrupt secret; original left untouched ({exc.strerror or exc})') from exc
-        raise SecretError(p, 'cannot quarantine corrupt secret; original left untouched (no free backup name)')
+                    p, f"cannot preserve corrupt credential; original retained ({exc})"
+                ) from exc
+        raise SecretError(p, "cannot preserve corrupt credential: backup names exhausted")
 
     def _create_secret(self, p):
         value = secrets.token_urlsafe(36)
-        tmp = p.with_name(f'{p.name}.tmp-{os.getpid()}-{secrets.token_hex(6)}')
+        tmp = p.with_name(f"{p.name}.tmp-{os.getpid()}-{secrets.token_hex(6)}")
         fd = None
         try:
             fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 fd = None
-                f.write(value + '\n')
+                f.write(value + "\n")
                 f.flush()
                 os.fsync(f.fileno())
             return self._publish_secret(tmp, p, value)
         except SecretError:
             raise
         except OSError as exc:
-            raise SecretError(p, f'cannot write secret ({exc.strerror or exc})') from exc
+            raise SecretError(p, f"cannot write secret ({exc.strerror or exc})") from exc
         finally:
             if fd is not None:
                 os.close(fd)
@@ -216,9 +169,10 @@ class Store:
             # Windows os.rename is atomic and refuses an existing destination;
             # on POSIX os.rename would clobber, so fail closed instead of
             # publishing a partially written file.
-            if os.name != 'nt':
+            if os.name != "nt":
                 raise SecretError(
-                    p, f'cannot publish secret atomically ({exc.strerror or exc})') from exc
+                    p, f"cannot publish secret atomically ({exc.strerror or exc})"
+                ) from exc
             try:
                 os.rename(str(tmp), str(p))
                 return value
@@ -226,79 +180,127 @@ class Store:
                 pass
             except OSError as exc2:
                 raise SecretError(
-                    p, f'cannot publish secret atomically ({exc2.strerror or exc2})') from exc2
+                    p, f"cannot publish secret atomically ({exc2.strerror or exc2})"
+                ) from exc2
         existing = Store._read_secret(p)
         if existing is None:
-            raise SecretError(p, 'secret file exists but is unreadable or corrupt')
+            raise SecretError(p, "secret file exists but is unreadable or corrupt")
         return existing
 
     def setting(self, key, default=None):
         with self.lock:
-            row = self.con.execute('SELECT data FROM setting WHERE key=?', (key,)).fetchone()
+            row = self.con.execute("SELECT data FROM setting WHERE key=?", (key,)).fetchone()
             return json.loads(row[0]) if row else default
 
     def set_setting(self, key, value):
         with self.lock, self.con:
-            self.con.execute('INSERT INTO setting(key,data) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data', (key, json.dumps(value, allow_nan=False)))
+            self.con.execute(
+                "INSERT INTO setting(key,data) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
+                (key, json.dumps(value, allow_nan=False)),
+            )
 
     def events(self, items):
         with self.lock, self.con:
-            self.con.executemany('INSERT OR IGNORE INTO event(id,ts,session_id,kind,data) VALUES(?,?,?,?,?)',
-                [(e['id'], int(e.get('ts') or now_ms()), e.get('session_id', ''), e.get('kind', 'event'), json.dumps(e, ensure_ascii=False, allow_nan=False)) for e in items])
+            self.con.executemany(
+                "INSERT OR IGNORE INTO event(id,ts,session_id,kind,data) VALUES(?,?,?,?,?)",
+                [
+                    (
+                        e["id"],
+                        int(e.get("ts") or now_ms()),
+                        e.get("session_id", ""),
+                        e.get("kind", "event"),
+                        json.dumps(e, ensure_ascii=False, allow_nan=False),
+                    )
+                    for e in items
+                ],
+            )
 
-    def timeline(self, limit=100, before=0, session_id='', project='', query=''):
+    def timeline(self, limit=100, before=0, session_id="", project="", query=""):
         terms, vals = [], []
         if before:
-            terms.append('seq<?'); vals.append(before)
+            terms.append("seq<?")
+            vals.append(before)
         if session_id:
-            terms.append('session_id=?'); vals.append(session_id)
+            terms.append("session_id=?")
+            vals.append(session_id)
         # Text search uses a bound parameter, never SQL interpolation.
         if query:
-            terms.append('data LIKE ?'); vals.append('%' + query[:200] + '%')
-        sql = 'SELECT seq,data FROM event' + (' WHERE ' + ' AND '.join(terms) if terms else '') + ' ORDER BY seq DESC LIMIT ?'
+            terms.append("data LIKE ?")
+            vals.append("%" + query[:200] + "%")
+        sql = (
+            "SELECT seq,data FROM event"
+            + (" WHERE " + " AND ".join(terms) if terms else "")
+            + " ORDER BY seq DESC LIMIT ?"
+        )
         vals.append(min(max(1, limit), 500) * (4 if project else 1))
         with self.lock:
             rows = self.con.execute(sql, vals).fetchall()
         result = []
         cursor = None
         for row in rows:
-            cursor = row['seq']
-            e = json.loads(row['data']); e['seq'] = row['seq']
-            if not project or path_key(e.get('project')) == path_key(project):
+            cursor = row["seq"]
+            e = json.loads(row["data"])
+            e["seq"] = row["seq"]
+            if not project or path_key(e.get("project")) == path_key(project):
                 result.append(e)
             if len(result) >= limit:
                 break
-        return {'events': result, 'next_before': cursor if len(rows) >= min(max(1, limit), 500) else None}
+        return {
+            "events": result,
+            "next_before": cursor if len(rows) >= min(max(1, limit), 500) else None,
+        }
 
     def reports(self):
         with self.lock:
-            return [dict(json.loads(r[0]), _received_at=r[1]) for r in self.con.execute('SELECT data,ts FROM report ORDER BY ts DESC LIMIT 5000')]
+            return [
+                dict(json.loads(r[0]), _received_at=r[1])
+                for r in self.con.execute("SELECT data,ts FROM report ORDER BY ts DESC LIMIT 5000")
+            ]
 
     def report(self, data):
         with self.lock, self.con:
-            found = self.con.execute('SELECT data FROM report WHERE id=?', (data['event_id'],)).fetchone()
+            found = self.con.execute(
+                "SELECT data FROM report WHERE id=?", (data["event_id"],)
+            ).fetchone()
             if found:
                 if json.loads(found[0]) != data:
-                    raise ValueError('event_id already exists with a different payload.')
+                    raise ValueError("event_id already exists with a different payload.")
                 return False
-            self.con.execute('INSERT INTO report VALUES(?,?,?)', (data['event_id'], data['timestamp'] or now_ms(), json.dumps(data, allow_nan=False)))
+            self.con.execute(
+                "INSERT INTO report VALUES(?,?,?)",
+                (
+                    data["event_id"],
+                    data["timestamp"] or now_ms(),
+                    json.dumps(data, allow_nan=False),
+                ),
+            )
             return True
 
     def assessments(self):
         with self.lock:
-            return {r[0]: json.loads(r[1]) for r in self.con.execute('SELECT session_id,data FROM assessment')}
+            return {
+                r[0]: json.loads(r[1])
+                for r in self.con.execute("SELECT session_id,data FROM assessment")
+            }
 
     def assess(self, sid, data):
         with self.lock, self.con:
-            self.con.execute('INSERT INTO assessment VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET data=excluded.data', (sid, json.dumps(data, allow_nan=False)))
+            self.con.execute(
+                "INSERT INTO assessment VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET data=excluded.data",
+                (sid, json.dumps(data, allow_nan=False)),
+            )
 
     def prune(self, days):
         with self.lock, self.con:
             cutoff = now_ms() - days * 86400000
-            self.con.execute('DELETE FROM event WHERE ts<?', (cutoff,))
-            self.con.execute('DELETE FROM event WHERE seq NOT IN (SELECT seq FROM event ORDER BY seq DESC LIMIT 100000)')
-            self.con.execute('DELETE FROM report WHERE ts<?', (cutoff,))
-            self.con.execute('DELETE FROM report WHERE id NOT IN (SELECT id FROM report ORDER BY ts DESC LIMIT 5000)')
+            self.con.execute("DELETE FROM event WHERE ts<?", (cutoff,))
+            self.con.execute(
+                "DELETE FROM event WHERE seq NOT IN (SELECT seq FROM event ORDER BY seq DESC LIMIT 100000)"
+            )
+            self.con.execute("DELETE FROM report WHERE ts<?", (cutoff,))
+            self.con.execute(
+                "DELETE FROM report WHERE id NOT IN (SELECT id FROM report ORDER BY ts DESC LIMIT 5000)"
+            )
 
     def close(self):
         """Release the sqlite handle. Idempotent and safe to call twice."""

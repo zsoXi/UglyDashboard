@@ -1,187 +1,313 @@
-# OpenCode Mission Control 4.0
+# OpenCode Mission Control v5
 
-Przebudowany `opencode_dashboard.py`: jeden lokalny panel dla OpenCode, logów Codexa, projektów, agentów, modeli, historii i MCP. Aplikacja pozostaje pojedynczym plikiem Python. HTML, CSS, JavaScript, serwer HTTP, czytniki i most MCP są w środku. Nie wymaga npm, Reacta, bundlera, pip ani zewnętrznego CDN.
+Lokalny panel obserwatora dla OpenCode, logów Codexa, projektów,
+agentów, modeli, historii i MCP. Jeden właściciel, jedna maszyna:
+czyta lokalne źródła tylko do odczytu i pokazuje aktywność,
+analitykę, alerty oraz integracje w przeglądarce. Nie uruchamia
+agentów, nie wysyła do nich poleceń ani nie modyfikuje repozytoriów.
 
-## Szybki start na Windows
+> Stan: utwardzanie v5 w toku na gałęzi
+> `fix/mission-control-v5-hardening-ui` (hardening Pythona, ścisłe typy
+> frontendu/build, testy przeglądarkowe, narzędzia dostawcze). Wszystko
+> oznaczone jako *oczekujące* jeszcze nie wylądowało; nic tutaj nie
+> twierdzi, że nieuruchomiona kontrola przeszła.
 
-Wymagany jest Python **3.10 lub nowszy**. Rozpakuj cały ZIP do stałego folderu i uruchom dwuklikiem **START_MISSION_CONTROL.cmd**. Launcher użyje `pyw` lub `pythonw`, gdy są dostępne, aby nie pozostawiać okna terminala. Otworzy panel w przeglądarce. Jeśli start się nie uda, uruchom `START_DEBUG.cmd`, który pokazuje komunikaty.
+## Struktura pakietu (v5, nie dawny pojedynczy plik)
 
-Alternatywnie:
-
-```powershell
-py -3 opencode_dashboard.py --open
+```text
+opencode_dashboard.py      Cienki launcher / API zgodności (importuje mission_control)
+mission_control/           Pakiet backendu: cli, core, engine, locking,
+                           mcp, oauth, server, sources, store
+web/                       Źródła frontendu (index.html, app.js, style.css)
+scripts/build.mjs          Krok budowania frontendu (npm run build)
+test_mission_control.py    Regresja offline (katalog główny)
+tests/                     Dodatkowe suity hardeningowe
+scripts/run_tests.py       Runner unittestów offline (uczciwy kod wyjścia)
+scripts/smoke_startup.py   Test dymny prawdziwego panelu na porcie loopback
+scripts/benchmark.py       Syntetyczny benchmark dużych danych (tylko stdlib)
+docs/benchmarks/           Oczyszczone wyniki benchmarków + opis metody
+.github/workflows/ci.yml   CI Windows + Linux (Python 3.10/3.14, Node 22)
 ```
 
-Domyślny adres to `http://127.0.0.1:8765`. Launcher otwiera adres z jednorazowo usuwanym z paska fragmentem zawierającym klucz właściciela. Klucz pozostaje w pamięci danej karty (`sessionStorage`), dopóki karta istnieje. Nie udostępniaj adresu z fragmentem logowania.
+Starsze opisy „jednego pliku Pythona ze wszystkim w środku” są
+nieaktualne: od podziału v5 HTML/CSS/JS mieszkają w `web/`, a backend
+Pythona w `mission_control/`. Launcher zachowuje dawną powierzchnię
+linii poleceń (`--db`, `--port`, `--self-test`, …).
 
-Zamknięcie karty nie zatrzymuje obserwatora. Zakończ go przez **Ustawienia → Zatrzymaj obserwator**. To wyłącza panel i jego most MCP, ale nie zatrzymuje agentów. W trybie konsolowym działa także Ctrl+C. Ponowne uruchomienie launchera otworzy istniejący panel, jeśli zgadza się tożsamość aplikacji i klucz właściciela.
+Źródła frontendu mieszkają w `web/` i są bundlowane przez
+`npm run build` (esbuild → `web/dist/app.js` + `style.css` +
+`manifest.json` z hashami wejść/wyjść). Wymagania: Node **≥ 22.13**
+i czyste `npm ci` z zacommitowanego lockfile. Serwer Pythona serwuje
+źródła z `web/` bezpośrednio; krok bundla jest mimo to wymagany
+(i puszcza go CI), żeby dowieść odtwarzalnego budowania zasobów
+wysyłkowych.
 
-Stary dashboard należy wcześniej zamknąć, jeżeli zajmuje ten sam port. Ta aplikacja nie odinstalowuje ani nie zatrzymuje innych usług. Możesz też wybrać inny port:
+## Szybki start (Windows)
+
+Wymagany Python **3.10+**. Dwuklik `START_MISSION_CONTROL.cmd`
+(użyje `pyw`/`pythonw`, gdy dostępne, więc nie zostaje okno konsoli)
+albo z PowerShella — cytuj ścieżkę, instalacje często leżą w folderach
+ze spacjami lub znakami `!`:
+
+```powershell
+py -3 "D:\Ścieżka Ze Spacjami\MissionControl\opencode_dashboard.py" --open
+```
+
+Domyślny adres: `http://127.0.0.1:8765`. Launcher otwiera adres, którego
+fragment niesie jednorazowy klucz właściciela; klucz zostaje w
+`sessionStorage` tej karty. Nie udostępniaj adresu z fragmentem
+logowania. Zamknięcie karty **nie** zatrzymuje obserwatora — użyj
+**Ustawienia → Zatrzymaj obserwator** (konsola: Ctrl+C). Ponowny start
+launchera otworzy istniejący panel, gdy zgadza się tożsamość aplikacji
+i klucz właściciela.
+
+Przy zajętym porcie wybierz inny:
 
 ```powershell
 py -3 opencode_dashboard.py --open --port 8766
 ```
 
-## Dziesięć obszarów funkcjonalnych
-
-| Obszar | Co zostało zaimplementowane |
-| --- | --- |
-| Centrum dowodzenia | Liczniki aktywności z poziomem pewności, karty projektów, ostatnie sesje, historia i zdrowie źródeł. |
-| ChatGPT MCP | Chroniony endpoint `/mcp`, narzędzia odczytu, opcjonalny `report_event`, identyfikacja zadeklarowanych klientów, OAuth z PKCE dla połączeń zdalnych. |
-| Codex | Odczyt lokalnych logów `sessions` i `archived_sessions`, znaczniki tur, narzędzia, modele i narastające zużycie tokenów. |
-| Graf agentów | Relacje rodzic/dziecko, rozróżnienie delegacji i forków, przesuwanie, powiększanie, klikany inspektor. Limit 120 węzłów w widoku. |
-| Historia | Wspólny strumień zdarzeń ze źródeł i raportów, wyszukiwanie i stronicowanie. |
-| Inspektor | Zadanie, model, źródło stanu, narzędzia, pliki, tokeny, definicja agenta i wpisana przez właściciela ocena wyniku. |
-| Wykrywanie źródeł | Skan wybranych folderów, wyniki z checkboxami i osobna decyzja o monitorowaniu. |
-| Modele i zużycie | Okresy, źródła, projekty, grupy porównywalnych zadań, cache, ceny, oceny testów i poprawek, wykresy, mapa aktywności oraz CSV/JSON. |
-| Alerty | Brak nowych dowodów aktywności, niezgodny model, błędy, powtarzane narzędzia, budżet, edycje poza zakresem i możliwe konflikty plików. Opcjonalne powiadomienia przeglądarki. |
-| Globalny panel projektów | Wspólny widok projektów OpenCode/Codex/MCP oraz kontekst Git; każde źródło zachowuje własną tożsamość. |
+Linux działa tak samo przez `python3`. Zweryfikowano na razie na
+Windows / Python 3.14.3 (patrz `TEST_REPORT.json`); linuksowe CI puszcza
+tę samą suitę przy każdym pushu (`.github/workflows/ci.yml`,
+oczekuje na pierwszy zielony przebieg).
 
 ## Podłączenie istniejącego OpenCode
 
-Najpierw otwórz **Źródła i MCP**. Panel próbuje znaleźć bazę OpenCode w standardowej lokalizacji użytkownika. Nie musi jednak trafić na niestandardową instalację. Wtedy wskaż plik bazy przez konfigurację lub argument `--db`:
+Wskaż panelowi bazę (`--db` można powtarzać). Przykład z symbolem
+zastępczym — podmień własną nazwę użytkownika:
 
 ```powershell
-py -3 opencode_dashboard.py --open --db "C:\Users\Matt\.local\share\opencode\opencode.db"
+py -3 opencode_dashboard.py --open --db "$env:USERPROFILE\.local\share\opencode\opencode.db"
 ```
 
-Ścieżka powyżej jest przykładem, a nie potwierdzeniem lokalizacji Twojej bazy. Można wskazać kilka baz, powtarzając argument.
+Do *potwierdzonej bieżącej* aktywności dodaj też adres HTTP już
+działającej instancji OpenCode („Połączenie z istniejącym OpenCode”,
+domyślny kandydat `http://127.0.0.1:4096`; port aplikacji desktopowej
+może być inny). Sama baza daje historię, nie dowód, że proces nadal
+pracuje. Panel nigdy nie startuje drugiego serwera OpenCode, nie skanuje
+portów, nie wysyła poleceń agentom i rozmawia tylko z jawnie wskazanymi
+adresami loopback. Jeśli serwer wymaga Basic Auth, wyeksportuj
+`OPENCODE_SERVER_PASSWORD` (i opcjonalne `OPENCODE_SERVER_USERNAME`) w
+środowisku panelu — haseł nie wkleja się do URL-i ani do czatu.
 
-Dla **potwierdzonej bieżącej aktywności** potrzebny jest również adres HTTP już działającej instancji OpenCode. Dodaj go w sekcji „Połączenie z istniejącym OpenCode”. Domyślny kandydat to `http://127.0.0.1:4096`, ale port aplikacji desktopowej może być inny. Odczyt samej bazy daje historię, nie pewność, że proces nadal pracuje.
-
-Panel nie uruchamia drugiego serwera OpenCode, nie skanuje portów i nie wysyła poleceń do agentów. Obsługuje wyłącznie jawnie wskazane adresy loopback. Jeśli serwer wymaga Basic Auth, przekaż `OPENCODE_SERVER_PASSWORD` i opcjonalne `OPENCODE_SERVER_USERNAME` w środowisku procesu panelu. Hasła nie wpisuje się w adres URL ani w czacie.
-
-Czytnik rozpoznaje dostępne kolumny SQLite, zamiast zakładać jedną sztywną wersję schematu. Zmiana formatu przez przyszłą wersję OpenCode może jednak wymagać aktualizacji adaptera; błąd pojawi się w sekcji zdrowia źródeł.
+Czytnik dopasowuje się do zastanych kolumn SQLite zamiast zakładać jeden
+schemat; niezgodny przyszły schemat zgłosi się w zdrowiu źródeł, nie
+przeczyta po cichu błędnie.
 
 ## Podłączenie logów Codexa
 
-Domyślnie używany jest lokalny katalog `.codex`, z uwzględnieniem `CODEX_HOME`, gdy został ustawiony. Niestandardowy katalog można wskazać przez `--codex-home` albo konfigurację:
+Domyślnie lokalny katalog `.codex` (szanuje `CODEX_HOME`); nadpisanie
+przez `--codex-home` albo konfigurację:
 
 ```powershell
-py -3 opencode_dashboard.py --open --codex-home "C:\Users\Matt\.codex"
+py -3 opencode_dashboard.py --open --codex-home "$env:USERPROFILE\.codex"
 ```
 
-Odczyt jest przyrostowy i obsługuje niedokończone linie JSONL, obrót logu, częściowe znaki UTF-8 oraz uszkodzone rekordy. Najnowsze logi wybierane są do ustawionego limitu; zakres i pominięcia są raportowane.
+Odczyt jest przyrostowy i znosi niedokończone linie JSONL, obrót logu,
+częściowe UTF-8 i uszkodzone rekordy; okno wyboru i pominięcia są
+raportowane. Lokalne logi nigdy nie pokazują prac wyłącznie chmurowych
+i nie są sondą żywotności procesu. Zdarzenie końca tury znaczy koniec
+tury — nie to, że zadanie przeszło testy.
 
-Logi lokalne nie zapewniają automatycznego dostępu do zadań wykonywanych wyłącznie w chmurze. Nie są też sondą żywotności procesu. Zdarzenie zakończenia tury oznacza zakończenie tury, nie dowód, że zadanie przeszło testy.
+## Codex jako lokalny klient MCP
 
-## Codex jako klient MCP panelu
-
-Uruchom panel. W **Źródła i MCP → Codex · lokalnie** skopiuj wygenerowany fragment TOML do konfiguracji MCP Codexa. Fragment ma już właściwą ścieżkę do aktualnego pliku i katalogu stanu.
-
-Przykład struktury:
+Uruchom panel, otwórz **Źródła i MCP → Codex · lokalnie** i skopiuj
+wygenerowany fragment TOML do konfiguracji MCP Codexa. Ma już prawdziwą
+ścieżkę interpretera, bieżący plik i katalog stanu:
 
 ```toml
 [mcp_servers.mission_control]
 command = "C:\\Path\\To\\Python\\python.exe"
-args = ["D:\\MissionControl\\opencode_dashboard.py", "--mcp-stdio", "--state-dir", "C:\\Users\\Matt\\.opencode-mission-control"]
+args = ["D:\\MissionControl\\opencode_dashboard.py", "--mcp-stdio", "--state-dir", "C:\\Users\\ty\\.opencode-mission-control"]
 startup_timeout_sec = 20
 tool_timeout_sec = 30
 ```
 
-Most stdio nie tworzy drugiego obserwatora. Odczytuje jego port z `runtime.json` i osobny lokalny token MCP. Panel musi być uruchomiony. Do stdio używany jest konsolowy `python.exe`, również wtedy, gdy sam interfejs uruchomiono przez `pythonw.exe`.
+Most stdio nie tworzy drugiego obserwatora: czyta port z
+`runtime.json` plus osobny lokalny token MCP. Panel musi działać. Do
+stdio używaj konsolowego `python.exe`, nawet gdy UI startował przez
+`pythonw.exe`. Wariant HTTP też generuje się w UI i wymaga
+`MISSION_CONTROL_MCP_TOKEN` w środowisku Codexa — trzymaj go w tajemnicy.
 
-Dostępny jest też wariant HTTP, generowany w interfejsie. Wymaga `MISSION_CONTROL_MCP_TOKEN` w środowisku Codexa. Nie publikuj tej wartości ani nie wysyłaj jej do rozmowy.
+## ChatGPT jako zdalny klient MCP (konfiguracja ręczna)
 
-## ChatGPT jako zdalny klient MCP
+**Nic tutaj nie łączy się samo z Twoim kontem ChatGPT, a most nie czyta
+w magiczny sposób wszystkich Twoich rozmów.** Widoczne są tylko wywołania
+przechodzące przez ten most oraz zdarzenia jawnie zaraportowane przez
+`report_event`. Konfiguracja leży po Twojej stronie:
 
-**Ta część wymaga konfiguracji po Twojej stronie. Nie jest automatycznie połączona z kontem ChatGPT.**
+1. Wystaw stabilny tunel HTTPS albo reverse proxy na lokalny port
+   panelu. Aplikacja tunelu nie instaluje ani nie otwiera. Zdalne MCP
+   działa tylko przez zewnętrzny HTTPS; zwykłe lokalne użycie nie
+   potrzebuje tunelu.
+2. W ustawieniach MCP ustaw `public_origin` (np.
+   `https://mc.twoja-domena.pl`, bez ścieżki) i dokładne callbacki
+   OAuth pokazane przez Twojego klienta ChatGPT. Domyślnie akceptowany
+   jest oficjalny `https://chatgpt.com/connector_platform_oauth_redirect`.
+3. Utwórz połączenie ChatGPT do `https://twój-host/mcp` z OAuth i
+   dynamiczną rejestracją klienta (DCR). Nie wymyślaj statycznych danych
+   klienta.
+4. Na stronie autoryzacji *tego obserwatora* wklej klucz parowania z
+   lokalnego panelu. Nie wysyłaj go czatem ani obcemu serwerowi MCP.
 
-1. Skonfiguruj stabilny tunel lub reverse proxy HTTPS do lokalnego portu panelu. Aplikacja nie instaluje ani nie otwiera tunelu.
-2. W sekcji MCP ustaw `public_origin`, na przykład `https://mc.twoja-domena.pl`, bez ścieżki. Podaj dokładne adresy callback OAuth, jakie akceptuje konfiguracja klienta ChatGPT. Domyślnie uwzględniono oficjalny stały callback `https://chatgpt.com/connector_platform_oauth_redirect`; przy innym wariancie klienta trzeba użyć pokazanego przez niego adresu.
-3. Utwórz połączenie ChatGPT z `https://twój-host/mcp`, wybierając OAuth i dynamiczną rejestrację klienta DCR. Nie wpisuj wymyślonych statycznych danych klienta.
-4. Na stronie autoryzacji **tego obserwatora** wklej klucz parowania z lokalnego panelu. Klucza nie przekazuje się w czacie ani obcemu serwerowi MCP.
-
-Implementacja zawiera metadata serwera i zasobu, DCR z listą callbacków, PKCE S256, kody jednorazowe, powiązanie tokenu z zasobem, odświeżanie z rotacją i unieważnianie. Dostęp zdalny nie obejmuje właścicielskich ustawień i zatrzymywania agentów. Token dostępu wygasa po godzinie; restart obserwatora unieważnia wydane tokeny, ale zachowuje rejestracje klientów.
-
-To lokalne narzędzie dla jednego właściciela, a nie niezależnie audytowany system tożsamości dla publicznej usługi wieloużytkownikowej. Przed wystawieniem do Internetu użyj prawidłowo skonfigurowanej warstwy TLS, ograniczenia ruchu i zabezpieczonego pośrednika. Nie wyłączaj kontroli Origin/Host, aby „naprawić” tunel. Proxy powinno przekazywać zaakceptowany Host, bez przepisywania autoryzacji.
-
-Połączenie ChatGPT nie zostało przetestowane end-to-end z Twoim kontem. Testy lokalne sprawdziły protokół MCP i przepływ OAuth na kontrolowanym kliencie.
+Zdalny OAuth jest praktycznie **domyślnie wyłączony** (pusty
+`public_origin`, brak publicznej ekspozycji). Implementacja obejmuje
+metadane serwera/zasobu, DCR z listą callbacków, PKCE S256, kody
+jednorazowe, tokeny związane z odbiorcą, rotację przy odświeżaniu i
+unieważnianie. Dostęp zdalny nie obejmuje ustawień właściciela ani
+zatrzymywania agentów. Tokeny dostępu żyją godzinę; restart obserwatora
+unieważnia wydane tokeny, zachowując rejestracje klientów. To lokalne
+narzędzie jednego właściciela, nie audytowany system tożsamości dla
+usług wieloużytkownikowych: zakończ poprawnie TLS, ogranicz ruch,
+przekazuj zaakceptowany Host nietknięty i nigdy nie wyłączaj kontroli
+Origin/Host, żeby „naprawić” tunel. Logowania end-to-end prawdziwym
+kontem ChatGPT nie testowano; protokół i OAuth zweryfikowano
+kontrolowanym klientem lokalnym.
 
 ## Narzędzia MCP
 
-Domyślnie dostępnych jest dziesięć narzędzi: `mission_overview`, `list_agents`, `agent_details`, `list_projects`, `timeline`, `model_comparison`, `alerts`, `sources`, `search`, `fetch`. Po włączeniu raportowania dochodzi `report_event`.
+Domyślne narzędzia odczytu: `mission_overview`, `list_agents`,
+`agent_details`, `list_projects`, `timeline`, `model_comparison`,
+`alerts`, `sources`, `search`, `fetch`. Włączenie raportowania dodaje
+`report_event` (opt-in, `enable_reporting`, domyślnie wyłączone).
+Sugerowana instrukcja dla klienta:
 
-Przykładowa instrukcja dla klienta:
+> Sprawdź mission_overview, potem list_agents. Oddziel aktywność
+> potwierdzoną od historycznej i zgłoszonej. Podaj projekt, rzeczywisty
+> model i ostatnie narzędzie. Nie licz definicji agentów jako
+> uruchomionych workerów.
 
-> Sprawdź mission_overview. Następnie list_agents. Oddziel aktywność potwierdzoną od historycznej i zgłoszonej. Podaj projekt, rzeczywisty model i ostatnie narzędzie. Nie licz definicji agentów jako uruchomionych workerów.
-
-## Raportowanie „to zadanie przyszło z ChatGPT”
-
-Włącz `enable_reporting` przełącznikiem w integracjach. Klient musi odświeżyć listę narzędzi i uzyskać zakres zapisu raportów. Następnie może wywołać `report_event` z identyfikatorem istniejącej sesji zwróconym przez `list_agents`:
-
-```json
-{
-  "event_id": "unikalny-id-zdarzenia",
-  "source": "chatgpt",
-  "session_id": "opencode:ses_TUTAJ_PRAWDZIWE_ID",
-  "task": "Przegląd regresji panelu",
-  "task_group": "dashboard-ui-round-1",
-  "state": "running"
-}
-```
-
-Raport jest deklaracją klienta. Nie zastępuje stanu API, nie nalicza dodatkowych tokenów i nie uruchamia pracy. Ponowienie identycznego `event_id` nie dubluje zdarzenia; zmiana treści pod tym samym ID jest odrzucana. Dla kolejnego zdarzenia użyj nowego ID.
-
-Nie da się z tego mostu automatycznie zobaczyć wszystkich rozmów ChatGPT ani wywołań do innych serwerów MCP. Monitorowane są własne źródła i wywołania przechodzące przez ten most. Inne orkiestratory muszą przesyłać raporty świadomie.
+`report_event` wymaga istniejącego ID sesji z `list_agents`; to
+deklaracja klienta (bez rozliczania tokenów, bez startu pracy).
+Powtórzenie `event_id` jest idempotentne; zmiana treści pod tym samym ID
+jest odrzucana.
 
 ## Znaczenie stanów i liczb
 
-`verified` oznacza świeży status odczytany z API OpenCode. `recorded` oznacza zapisany stan lub znacznik w danych źródłowych. `reported` oznacza deklarację klienta. `unknown` i `stale` sygnalizują brak wystarczającego dowodu lub jego utratę świeżości. Sam niedawny timestamp nie tworzy potwierdzonego RUNNING. Również stan w inspektorze traci ważność po przekroczeniu okna świeżości.
+`verified` = świeży status z API OpenCode. `recorded` = zapisany
+stan/znacznik w danych źródłowych. `reported` = czyjeś oświadczenie.
+`unknown` / `stale` = za mało dowodów albo wygasły. Sam świeży timestamp
+nigdy nie robi RUNNING; stan inspektora wygasa po oknie świeżości.
 
-Rodzic zapisany w sesji nie wystarcza do rozpoznania subagenta. Wywołanie narzędzia delegującego lub jawna informacja o uruchomieniu dziecka daje mocniejszy dowód; fork jest osobną relacją. Graf nie dopisuje fikcyjnych ról CTO/TL na podstawie samej nazwy.
+Zapisany rodzic nie dowodzi subagenta: tylko delegujące wywołanie
+narzędzia (albo jawna informacja o starcie dziecka) awansuje do
+`delegated`; forki zostają osobno. Graf nie dopisuje ról CTO/TL z nazw
+i pokazuje co najwyżej 120 węzłów.
 
-Cache i reasoning są normalizowane zależnie od źródła. Nie sumujemy jednocześnie zapisów wiadomości i odpowiadających im step-finish. Narastające liczniki Codexa nie są doliczane od nowa przy każdym odczycie. Router JSONL pozostaje osobnym rejestrem, bo jego requesty mogą pokrywać się z natywnymi sesjami.
+Matematyka tokenów: cache/reasoning normalizowane na źródło; zapisów
+wiadomości i odpowiadających im step-finish nie sumujemy podwójnie;
+narastających liczników Codexa nie doliczamy od nowa; rejestr routera
+jest osobny (może pokrywać się z sesjami natywnymi). Wiek sesji to nie
+czas pracy modelu. Tabele plików dzielą tokeny sesji równo między
+odnotowane pliki — oznaczone jako podział, nie pomiar kosztu edycji.
+Koszt pochodzi z zapisanych danych albo z jawnie ustawionych cen
+USD-za-milion; nie ma zgadywanych cen wbudowanych.
 
-Czas od utworzenia sesji nie jest czasem pracy modelu. W ocenie można wpisać rzeczywiście zmierzony czas, rezultat testów, grupę zadania i liczbę poprawek. Brak danych pozostaje brakiem danych. Testy nie są uznawane za zaliczone tylko dlatego, że agent wywołał komendę o nazwie `test`.
-
-Koszt pochodzi z zapisanych danych albo z jawnie skonfigurowanych cen. Waluta cennika to USD za milion tokenów; nie ma wbudowanych zgadywanych cen. Tabela plików pokazuje wyraźnie oznaczony równy podział kosztu tokenowego sesji między odnotowane pliki. Nie przedstawiamy go jako pomiaru faktycznego kosztu każdej edycji. Widok Git pokazuje kontekst commitów, ale nie wycenia ich za pomocą przypadkowego okna czasowego.
-
-## Alerty i granice interwencji
-
-W `expected_models` ustaw dokładny identyfikator modelu dla nazwy agenta albo canonical ID sesji. To pozwala wykryć użycie droższego lub po prostu innego modelu. `allowed_paths` mapuje nazwę agenta na dozwolone foldery edycji. Reguły tylko alarmują; nie przełączają modeli i nie cofają edycji.
-
-Przerwanie agenta OpenCode jest domyślnie wyłączone. Po ustawieniu `allow_abort: true` właściciel może użyć przycisku przy sesji znanej podłączonemu API, ale musi wpisać jej dokładny natywny ID. Zwykły token MCP i token OAuth nie mają tej możliwości. Panel nie zapewnia odpowiednika abort dla lokalnych logów Codexa.
+Alerty tylko alarmują (nieświeże źródło, niezgodny model, błędy, pętle
+narzędzi, budżet, edycje poza zakresem, konflikty plików): ustaw dokładne
+ID modeli w `expected_models` i foldery w `allowed_paths`. Zatrzymanie
+agenta OpenCode wymaga jawnego `allow_abort: true` **i** wpisania przez
+właściciela dokładnego natywnego ID; zwykłe tokeny MCP/OAuth nigdy nie
+mogą przerywać, a logi Codexa nie mają przerywania wcale.
 
 ## Skanowanie, retencja i prywatność
 
-Skanuj wybrane foldery, np. własny katalog projektów, zamiast całego dysku. Skan ma ograniczoną głębokość, limit 6000 folderów i 12 sekund oraz nie podąża za dowiązaniami. Zaznaczenie wyników i osobne zatwierdzenie dopiero dodaje źródła. Nie przeszukuje plików `auth.json` ani `.env`.
+Skanuj wybrane foldery (np. katalog projektów), nigdy całe dyski:
+ograniczona głębokość, 6000 folderów, 12 s, bez podążania za
+dowiązaniami, `auth.json`/`.env` nigdy nie przeszukiwane. Wyniki
+zaznaczasz checkboxami, monitorowanie startuje dopiero osobną decyzją.
+Źródła otwierane są read-only; własny stan mieszka w
+`~/.opencode-mission-control` (`config.json`, `observer.sqlite`,
+`runtime.json`, logi, `owner.token`, `mcp.token`, `pairing.key`) — trzy
+klucze są poufne, tego katalogu nigdy nie commituj ani nie synchronizuj.
 
-Aplikacja czyta bazy OpenCode w trybie read-only. Nie zmienia repozytoriów, logów Codexa ani konfiguracji OpenCode. Własny stan przechowuje w `~/.opencode-mission-control`: `config.json`, `observer.sqlite`, `runtime.json`, logach oraz plikach `owner.token`, `mcp.token`, `pairing.key`. Te trzy klucze są poufne. Nie umieszczaj katalogu stanu w publicznym repozytorium ani synchronizacji udostępnionej innym osobom.
+Limity pokrycia (domyślne; ograniczenia źródeł widać w panelu):
 
-Domyślnie odczytywanych jest do 1000 sesji z każdej bazy i 400 najnowszych logów Codexa. Własna historia zdarzeń jest ograniczona retencją 90 dni i limitem rekordów. Ograniczenie źródła jest pokazywane w panelu. Duża baza może wymagać zmniejszenia okna albo dłuższego interwału odczytu.
+| Źródło | Limit |
+| --- | --- |
+| Sesje OpenCode DB | `history_limit` 1000 najnowszych na bazę |
+| Pliki logów Codexa | 400 najnowszych |
+| Wiadomości / sesję | 800 najnowszych |
+| Party / sesję | 4000 najnowszych, łącznie 250000 |
+| Zdarzenia / sesję | ostatnie 120 |
+| Własna historia zdarzeń | retencja 90 dni |
+| Graf agentów (widok) | 120 węzłów |
+| Cache analityki | 16 wpisów |
 
-Prompty i wyniki narzędzi mogą zawierać dane wrażliwe. Redakcja znanych wzorców kluczy jest tylko pomocą, nie gwarancją usunięcia wszystkich sekretów. `show_prompts: false` ukrywa prompty i treści definicji, ale nie gwarantuje bezpiecznej publikacji wyników narzędzi. Uprawnienia Windows zależą także od ACL katalogu i konta użytkownika.
+Prompty i wyniki narzędzi mogą nieść sekrety; redakcja znanych wzorców
+kluczy to pomoc, nie gwarancja. `show_prompts: false` chowa prompty
+i definicje, ale nie czyni wyników narzędzi bezpiecznymi do publikacji.
+Na Windows uprawnienia plików zależą dodatkowo od ACL katalogu i konta.
 
-## Weryfikacja tej wersji
+## Cykl życia silnika i blokady (jak w kodzie)
 
-W środowisku testowym Linux/Python wykonano **91 testów regresyjnych**, **10 wbudowanych testów kontrolnych** i **25 sprawdzeń interfejsu w Chromium**. Używano wyłącznie sztucznych baz, logów i zadań. Sprawdzono m.in. HTTP/MCP, OAuth/PKCE, zakresy dostępu, cache i tokeny, forki, niepełne logi, zapis ocen, skaner, eksport, wszystkie widoki i układ mobilny.
+`Engine` (`mission_control/engine.py`) zbiera źródła w niezmienny
+publikowany snapshot. `lock` (RLock) chroni sesje/snapshot/konfigurację/
+fakty/cache; `poll_lock` serializuje cykle kolektora; cały I/O sieciowy,
+bazodanowy i gitowy dzieje się **poza** `lock`, a publikowane obiekty
+są podmieniane kopiuj-i-zamień pod `lock`. Cykl: konstrukcja →
+`start()` (pętla `poll()` w tle) → `poll()` na cykl → `close()`; użycie
+po zamknięciu rzuca `LifecycleError`. Uszkodzone lokalne sekrety rzucają
+`SecretError` zamiast cichej rotacji — odzysk jest jawny (usuń plik
+tokenu przy zatrzymanym obserwatorze; świeży sekret utworzy się przy
+starcie), a uszkodzone bajty lądują w kwarantannie (`.bak`).
 
-Przeglądarka testowa miała zablokowaną nawigację sieciową przez politykę środowiska. W testach UI wstrzyknięto dostarczony HTML/CSS/JS i połączono fetch z rzeczywistym lokalnym serwerem fixture przez adapter testowy. Polityk przeglądarki nie zmieniano. Zwykłe żądania HTTP i MCP zostały osobno sprawdzone zestawem regresyjnym.
+## Weryfikacja (tylko faktyczne wyniki)
 
-Nie przeprowadzono rzeczywistego uruchomienia na Twoim Windows, na Twojej bazie ani end-to-end z Twoim kontem ChatGPT/Codex. Launcher Windows jest przygotowany, lecz nie był uruchomiony na Windows w tym środowisku. To nie jest niezależny audyt bezpieczeństwa.
-
-Do odtworzenia testów standardowej biblioteki:
+* Regresja: **144 przebiegi, 0 porażek, 2 pominięcia** (Windows,
+  Python 3.14.3, ~37 s, zero `ResourceWarning`) przez `python -X utf8
+  scripts/run_tests.py`. Pominięcia: brak tworzenia dowiązań, asercja
+  uprawnień POSIX (Windows używa ACL).
+* Test wbudowany: **10/10** przez `opencode_dashboard.py --self-test`.
+* Lint: `ruff check` jest czysty (0 błędów).
+* Benchmark syntetyczny (po poprawce, `docs/benchmarks/*-after.json`):
+  1000 sesji / 100 tys. zdarzeń → zimny parse ~1,4 s, zimny poll **8,9 s**,
+  pełne pokrycie; 1 mln zdarzeń → zimny poll **12,6 s**, publikuje
+  **96 z 1000** sesji z `deadline_exceeded=true` / `truncated=true`
+  (wcześniej 0 sesji / `OperationalError: interrupted`). Niepełne okno
+  jest świadomie przyjętym, zapisanym ograniczeniem i jest oznaczone w
+  interfejsie („Statystyki niepełne”). Szczegóły i uczciwa metoda pamięci
+  w `docs/benchmarks/README.md`.
+* CI (`.github/workflows/ci.yml`, Windows+Ubuntu × Python 3.10/3.14,
+  Node 22, przypięty ruff, self-test, regresja, `npm run check`,
+  wymagany Playwright na obu systemach z wyłącznie syntetycznymi
+  artefaktami błędów): **brak przebiegu na GitHubie** — nie twierdzimy,
+  że jest zielone, dopóki nie zostanie uruchomione.
+* Testy przeglądarkowe: `playwright.config.mjs` (MUSE-1), global setup
+  stawia syntetyczny fixture (`scripts/browser_fixture.py`, prawdziwy
+  Engine + Server, dane ulotne). **27/27 przechodzi lokalnie**
+  (desktop + mobile) przez `npx playwright test`; publikowalne zrzuty
+  lądują w `docs/screenshots/`, dodatkowe w `artifacts/`.
+* Bramki frontendu (DS-1): `npm run lint`, `npm run typecheck`
+  (ścisły), `npm run format:check` oraz `npm run build` (odtwarzalny
+  bundle) przechodzą — zweryfikowano lokalnie 2026-09-16 (Windows, Node
+  z tego repozytorium).
 
 ```powershell
 py -3 opencode_dashboard.py --self-test
-py -3 test_mission_control.py
+py -3 scripts/run_tests.py
+py -3 scripts/smoke_startup.py
+py -3 scripts/benchmark.py
 ```
 
-Test uprawnień POSIX jest pomijany na Windows; test dowiązań pomija się, jeśli ich tworzenie jest niedozwolone. Nie są potrzebne dane użytkownika. Szczegóły wykonania znajdują się w `TEST_REPORT.json`.
+Pełny log: `artifacts/unittest.log` (lokalny, ignorowany przez git).
+Maszynowe podsumowanie: `TEST_REPORT.json`.
 
-## Źródła dokumentacji integracji
-
-Dokumentacja użyta przy implementacji, sprawdzona 16 września 2026:
+## Źródła dokumentacji integracji (sprawdzone 2026-09-16)
 
 * OpenCode server: https://opencode.ai/docs/server/
 * Codex MCP: https://developers.openai.com/codex/mcp
-* OpenAI authentication: https://developers.openai.com/plugins/build/auth
+* OpenAI app auth: https://developers.openai.com/plugins/build/auth
 * MCP Streamable HTTP: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
 * MCP tools: https://modelcontextprotocol.io/specification/2025-11-25/server/tools
 
-Serwer jawnie negocjuje wersje MCP `2025-11-25` i `2025-06-18`. Nie deklaruje automatycznej zgodności ze wszystkimi przyszłymi wersjami protokołu. Format lokalnych logów może zmieniać się niezależnie od protokołu MCP.
+Negocjowane wersje MCP to tylko `2025-11-25` i `2025-06-18`. Lokalne
+formaty logów ewoluują niezależnie od specyfikacji MCP.
 
 ## Powrót do poprzedniej wersji
 
-Kopia przesłanego oryginału jest w `backup/opencode_dashboard_original.py`. W razie potrzeby zatrzymaj nowy obserwator, zachowaj jego katalog stanu i zastąp główny plik kopią. Źródłowe dane OpenCode i Codexa nie wymagają przywracania, ponieważ ta wersja ich nie nadpisuje.
+`backup/opencode_dashboard_original.py` przechowuje wcześniej wydany
+plik. Zatrzymaj nowy obserwator, odłóż jego katalog stanu i przywróć
+kopię. Źródłowych danych OpenCode/Codexa nie trzeba przywracać — ta
+aplikacja ich nigdy nie zapisuje.

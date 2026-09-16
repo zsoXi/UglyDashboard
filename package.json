@@ -1,0 +1,27 @@
+{
+  "name": "uglydashboard-mission-control",
+  "version": "5.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "lint": "eslint web/app.js scripts/*.mjs eslint.config.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "format": "prettier --write web/app.js web/style.css web/index.html scripts/*.mjs eslint.config.mjs tsconfig.json package.json",
+    "format:check": "prettier --check web/app.js web/style.css web/index.html scripts/*.mjs eslint.config.mjs tsconfig.json package.json",
+    "build": "node scripts/build.mjs",
+    "check": "npm run lint && npm run typecheck && npm run format:check && npm run build",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "eslint": "10.10.0",
+    "@eslint/js": "10.0.1",
+    "prettier": "3.9.7",
+    "esbuild": "0.28.2",
+    "@playwright/test": "1.63.0",
+    "globals": "17.12.0"
+  }
+}

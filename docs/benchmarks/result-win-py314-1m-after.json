@@ -1,0 +1,89 @@
+{
+  "benchmark": "mission-control-synthetic-large-data",
+  "sanitized": true,
+  "phase": "after bounded-read fix (soft deadline + partial coverage)",
+  "note": "Synthetic temporary fixture only; no user data touched. History windows are the production caps; coverage records any truncation.",
+  "environment": {
+    "python": "3.14.3",
+    "platform": "Windows",
+    "machine": "AMD64"
+  },
+  "config": {
+    "sessions": 1000,
+    "events_requested": 1000000,
+    "history_limit": 1000
+  },
+  "fixture": {
+    "sessions": 1000,
+    "messages": 2000,
+    "parts": 998000,
+    "events": 1000000,
+    "avg_events_per_session": 1000.0,
+    "db_bytes": 247316480
+  },
+  "fixture_generation_seconds": 13.794,
+  "parse_cold_seconds": 10.027,
+  "parse_error": "",
+  "poll_cold_seconds": 12.627,
+  "analytics_cold_seconds": 0.008,
+  "analytics_warm_seconds": 0.003,
+  "analytics_sessions": 96,
+  "analytics_tokens": 9707040.0,
+  "snapshot_sessions": 96,
+  "coverage_direct_reader": {
+    "total_sessions": 1000,
+    "loaded_sessions": 95,
+    "parts_loaded": 94810,
+    "truncated_sessions": 0,
+    "deadline_exceeded": true,
+    "truncated": true,
+    "rejected_records": {
+      "rejected_total": 0,
+      "counts": {},
+      "samples": []
+    }
+  },
+  "coverage_engine_poll": {
+    "ok": true,
+    "error": "Read exceeded its deadline; partial coverage.",
+    "total_sessions": 1000,
+    "loaded_sessions": 96,
+    "parts_loaded": 95808,
+    "truncated_sessions": 0,
+    "truncated": true,
+    "rejected_records": {
+      "rejected_total": 0,
+      "counts": {},
+      "samples": []
+    }
+  },
+  "memory_poll": {
+    "label": "cold poll (traced)",
+    "tracemalloc_current_bytes": 12260457,
+    "tracemalloc_peak_bytes": 21913322,
+    "tracemalloc": "active (Python allocations only, bytes)",
+    "resource": "not available on Windows (no stdlib resource module)",
+    "windows_working_set_bytes": 155623424,
+    "windows_peak_working_set_bytes": 516120576,
+    "windows": "GetProcessMemoryInfo working set, bytes",
+    "traced_poll_seconds": 12.333,
+    "traced_poll_ok": true,
+    "traced_poll_note": "tracemalloc slows allocation-heavy collection; traced seconds overstate production wall time and may trip the query guard."
+  },
+  "memory_analytics_cold": {
+    "note": "not traced separately; cold aggregation peak is bounded by the analytics-warm sample plus one aggregation pass over in-memory facts"
+  },
+  "memory_analytics_warm": {
+    "label": "analytics warm (cache hit)",
+    "tracemalloc_current_bytes": 4864,
+    "tracemalloc_peak_bytes": 138715,
+    "tracemalloc": "active (Python allocations only, bytes)",
+    "resource": "not available on Windows (no stdlib resource module)",
+    "windows_working_set_bytes": 122777600,
+    "windows_peak_working_set_bytes": 516120576,
+    "windows": "GetProcessMemoryInfo working set, bytes"
+  },
+  "memory_method": "tracemalloc peak = Python allocations in bytes; resource.ru_maxrss only where stdlib resource exists (Unix; KiB except macOS bytes); Windows working set via psapi bytes where available. No method is reported where its probe did not run.",
+  "cache_effect": "analytics warm is expected faster (OrderedDict cache, ANALYTICS_CACHE_MAX=16); cold builds facts, warm is a copy.",
+  "events_per_second_poll": 79195.4
+}

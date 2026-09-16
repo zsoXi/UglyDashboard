@@ -1,0 +1,68 @@
+{
+  "benchmark": "mission-control-synthetic-large-data",
+  "sanitized": true,
+  "note": "Synthetic temporary fixture only; no user data touched. History windows are the production caps; coverage records any truncation.",
+  "environment": {
+    "python": "3.14.3",
+    "platform": "Windows",
+    "machine": "AMD64"
+  },
+  "config": {
+    "sessions": 1000,
+    "events_requested": 1000000,
+    "history_limit": 1000
+  },
+  "fixture": {
+    "sessions": 1000,
+    "messages": 2000,
+    "parts": 998000,
+    "events": 1000000,
+    "avg_events_per_session": 1000.0,
+    "db_bytes": 247316480
+  },
+  "fixture_generation_seconds": 12.356,
+  "parse_cold_seconds": null,
+  "parse_error": "OperationalError: interrupted",
+  "poll_cold_seconds": 12.248,
+  "analytics_cold_seconds": 0.009,
+  "analytics_warm_seconds": 0.009,
+  "analytics_sessions": 0,
+  "analytics_tokens": 0,
+  "snapshot_sessions": 0,
+  "coverage_direct_reader": {
+    "error": "OperationalError: interrupted"
+  },
+  "coverage_engine_poll": {
+    "ok": false,
+    "error": "interrupted"
+  },
+  "memory_poll": {
+    "label": "cold poll (traced)",
+    "tracemalloc_current_bytes": 18547,
+    "tracemalloc_peak_bytes": 7445930,
+    "tracemalloc": "active (Python allocations only, bytes)",
+    "resource": "not available on Windows (no stdlib resource module)",
+    "windows_working_set_bytes": 64905216,
+    "windows_peak_working_set_bytes": 516263936,
+    "windows": "GetProcessMemoryInfo working set, bytes",
+    "traced_poll_seconds": 12.394,
+    "traced_poll_ok": false,
+    "traced_poll_note": "tracemalloc slows allocation-heavy collection; traced seconds overstate production wall time and may trip the query guard."
+  },
+  "memory_analytics_cold": {
+    "note": "not traced separately; cold aggregation peak is bounded by the analytics-warm sample plus one aggregation pass over in-memory facts"
+  },
+  "memory_analytics_warm": {
+    "label": "analytics warm (cache hit)",
+    "tracemalloc_current_bytes": 4840,
+    "tracemalloc_peak_bytes": 137523,
+    "tracemalloc": "active (Python allocations only, bytes)",
+    "resource": "not available on Windows (no stdlib resource module)",
+    "windows_working_set_bytes": 61304832,
+    "windows_peak_working_set_bytes": 516263936,
+    "windows": "GetProcessMemoryInfo working set, bytes"
+  },
+  "memory_method": "tracemalloc peak = Python allocations in bytes; resource.ru_maxrss only where stdlib resource exists (Unix; KiB except macOS bytes); Windows working set via psapi bytes where available. No method is reported where its probe did not run.",
+  "cache_effect": "analytics warm is expected faster (OrderedDict cache, ANALYTICS_CACHE_MAX=16); cold builds facts, warm is a copy.",
+  "events_per_second_poll": null
+}

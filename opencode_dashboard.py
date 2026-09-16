@@ -1,36 +1,212 @@
-"""Thin launcher / compatibility entrypoint for OpenCode Mission Control.
+# Stable launcher and explicitly exported compatibility API.
+import json
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-The implementation now lives in the :mod:`mission_control` package. This file
-remains the stable double-click entrypoint (``opencode_dashboard.py``) and keeps
-the historical flat namespace importable for tooling, the MCP stdio bridge and
-the regression suite.
-"""
-import json  # noqa: F401
-import sys  # noqa: F401
-from datetime import datetime, timedelta, timezone  # noqa: F401
-from pathlib import Path  # noqa: F401
-
-from mission_control import *  # noqa: F401,F403
-from mission_control.cli import (  # noqa: F401
+from mission_control import (
+    ACTIVE,
+    APP,
+    CSS,
+    HOME,
+    INTEGRATION_NOTES,
+    JS,
+    LOCAL_HTTP,
+    LOG,
+    MAX_BODY,
+    MAX_LINE,
+    MAX_OC_MESSAGES_PER_SESSION,
+    MAX_OC_PART_PAGE,
+    MAX_OC_PARTS_PER_SESSION,
+    MAX_OC_PARTS_TOTAL,
+    MAX_RESPONSE,
+    MAX_SESSION_USAGE_EVENTS,
+    MCP,
+    OAUTH_PAGE,
+    PACKAGE_ROOT,
+    PAGE,
+    REVEALABLE_SECRETS,
+    SECRET_RE,
+    STATE_DEFAULT,
+    STATES,
+    TERMINAL,
+    VERSION,
+    WEB_DIR,
+    Diagnostics,
+    Engine,
+    Handler,
+    JsonlReader,
+    LifecycleError,
+    NoRedirect,
+    OAuth,
+    RPCError,
+    SecretError,
+    Server,
+    Store,
+    add_event,
+    add_usage,
+    bounded_append,
+    build_fact,
+    build_facts,
     builtin_self_test,
     cli_report,
+    codex_apply,
+    codex_usage,
+    columns,
+    compute_analytics,
+    day,
+    default_config,
+    derive_alerts,
+    digest,
+    discover_codex_files,
+    enrich_oc_session,
+    existing_unique,
+    extract_files,
+    fingerprint,
+    git_info,
+    is_within,
+    launcher_path,
+    local_json,
     main,
+    make_session,
+    normalize_report,
+    now_ms,
+    number,
+    obj,
+    oc_headers,
+    oc_usage,
+    path_key,
+    path_name,
+    probe_opencode,
+    public_copy,
+    read_definitions,
+    read_oc_live,
+    read_opencode,
+    readonly_db,
+    record_usage,
+    redact,
+    reject_json_constant,
+    safe_repr,
+    scan_paths,
+    stamp,
     stdio_bridge,
+    stdio_script_args,
+    tool_detail,
+    validate_config,
+    zero_usage,
 )
 
+__all__ = [
+    "ACTIVE",
+    "APP",
+    "CSS",
+    "Diagnostics",
+    "Engine",
+    "HOME",
+    "Handler",
+    "INTEGRATION_NOTES",
+    "JS",
+    "JsonlReader",
+    "LOCAL_HTTP",
+    "LOG",
+    "LifecycleError",
+    "MAX_BODY",
+    "MAX_LINE",
+    "MAX_OC_MESSAGES_PER_SESSION",
+    "MAX_OC_PARTS_PER_SESSION",
+    "MAX_OC_PARTS_TOTAL",
+    "MAX_OC_PART_PAGE",
+    "MAX_RESPONSE",
+    "MAX_SESSION_USAGE_EVENTS",
+    "MCP",
+    "NoRedirect",
+    "OAUTH_PAGE",
+    "OAuth",
+    "PACKAGE_ROOT",
+    "PAGE",
+    "Path",
+    "REVEALABLE_SECRETS",
+    "RPCError",
+    "SECRET_RE",
+    "STATES",
+    "STATE_DEFAULT",
+    "SecretError",
+    "Server",
+    "Store",
+    "TERMINAL",
+    "VERSION",
+    "WEB_DIR",
+    "add_event",
+    "add_usage",
+    "bounded_append",
+    "build_fact",
+    "build_facts",
+    "builtin_self_test",
+    "cli_report",
+    "codex_apply",
+    "codex_usage",
+    "columns",
+    "compute_analytics",
+    "datetime",
+    "day",
+    "default_config",
+    "derive_alerts",
+    "digest",
+    "discover_codex_files",
+    "enrich_oc_session",
+    "existing_unique",
+    "extract_files",
+    "fingerprint",
+    "git_info",
+    "is_within",
+    "json",
+    "launcher_path",
+    "local_json",
+    "main",
+    "make_session",
+    "normalize_report",
+    "now_ms",
+    "number",
+    "obj",
+    "oc_headers",
+    "oc_usage",
+    "path_key",
+    "path_name",
+    "probe_opencode",
+    "public_copy",
+    "read_definitions",
+    "read_oc_live",
+    "read_opencode",
+    "readonly_db",
+    "record_usage",
+    "redact",
+    "reject_json_constant",
+    "safe_repr",
+    "scan_paths",
+    "stamp",
+    "stdio_bridge",
+    "stdio_script_args",
+    "sys",
+    "timedelta",
+    "timezone",
+    "tool_detail",
+    "validate_config",
+    "zero_usage",
+]
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except SystemExit:
         raise
     except Exception as exc:
-        LOG.exception('Startup failed')
+        LOG.exception("Startup failed")
         if sys.stderr:
-            print(f'{APP}: {exc}', file=sys.stderr)
+            print(f"{APP}: {exc}", file=sys.stderr)
         else:
             try:
                 import tkinter.messagebox
+
                 tkinter.messagebox.showerror(APP, str(exc))
             except Exception:
                 pass
