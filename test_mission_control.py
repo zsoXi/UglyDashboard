@@ -72,8 +72,9 @@ def fixture_codex(root):
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name)
-    def tearDown(self):
-        self.tmp.cleanup()
+        # Registered first so LIFO ordering runs it last, after any Engine/Store
+        # cleanups registered later. This is what prevents WinError 32 on Windows.
+        self.addCleanup(self.tmp.cleanup)
 
 
 class ParsingTests(Base):

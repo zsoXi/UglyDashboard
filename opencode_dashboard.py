@@ -903,6 +903,21 @@ def git_info(directory):
     except Exception as e:
         return {'branch': branch, 'commits': [], 'error': redact(e, 180)}
 
+class SecretError(RuntimeError):
+    """Raised when a local secret file exists but is unusable.
+
+    Carries the offending path and a machine-readable ``reason`` so callers can
+    present a readable diagnostic instead of silently rotating credentials.
+    """
+    def __init__(self, path, reason):
+        self.path = Path(path)
+        self.reason = reason
+        super().__init__(f'{reason}: {self.path}')
+
+
+SECRET_RE = re.compile(r'^[A-Za-z0-9_\-]{32,512}$')
+
+
 class Store:
     """Private observer database. Never reuses the OpenCode/Codex source DB."""
     def __init__(self, directory):
@@ -914,6 +929,7 @@ class Store:
             pass
         self.path = self.directory / 'observer.sqlite'
         self.lock = threading.RLock()
+        self._closed = False
         self.con = sqlite3.connect(self.path, check_same_thread=False, timeout=5)
         self.con.row_factory = sqlite3.Row
         self.con.executescript('''
@@ -929,18 +945,81 @@ class Store:
         ''')
         self.con.commit()
 
-    def secret(self, name):
+    def secret(self, name, repair=False):
+        """Return a stable local secret, creating it once if absent.
+
+        Recovery is explicit. A file that is empty, truncated or corrupt raises
+        :class:`SecretError` unless ``repair=True`` is passed, in which case the
+        damaged file is preserved as ``<name>.corrupt-<ts>.bak`` before a fresh
+        secret is generated. Credentials are never silently rotated.
+        """
         p = self.directory / name
         if p.exists():
+            value = self._read_secret(p)
+            if value is not None:
+                return value
+            if not repair:
+                raise SecretError(p, 'secret file is empty, truncated or corrupt')
+            self._quarantine_secret(p)
+        return self._create_secret(p)
+
+    @staticmethod
+    def _read_secret(p):
+        try:
             value = p.read_text('utf-8').strip()
-            if len(value) < 32:
-                raise ValueError(f'Invalid secret file: {p}')
-            return value
+        except (OSError, UnicodeDecodeError):
+            return None
+        return value if SECRET_RE.match(value) else None
+
+    def _quarantine_secret(self, p):
+        backup = p.with_name(f'{p.name}.corrupt-{int(time.time())}.bak')
+        try:
+            os.replace(str(p), str(backup))
+            return backup
+        except OSError:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+            return None
+
+    def _create_secret(self, p):
         value = secrets.token_urlsafe(36)
-        fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            f.write(value + '\n')
-        return value
+        tmp = p.with_name(f'{p.name}.tmp-{os.getpid()}-{secrets.token_hex(4)}')
+        try:
+            fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except OSError as exc:
+            raise SecretError(p, f'cannot write secret ({exc.strerror or exc})') from exc
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write(value + '\n')
+                f.flush()
+                os.fsync(f.fileno())
+            try:
+                os.link(str(tmp), str(p))
+            except FileExistsError:
+                existing = self._read_secret(p)
+                if existing is None:
+                    raise SecretError(p, 'secret file exists but is unreadable')
+                return existing
+            except OSError:
+                try:
+                    fd2 = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    existing = self._read_secret(p)
+                    if existing is None:
+                        raise SecretError(p, 'secret file exists but is unreadable')
+                    return existing
+                with os.fdopen(fd2, 'w', encoding='utf-8') as f2:
+                    f2.write(value + '\n')
+                    f2.flush()
+                    os.fsync(f2.fileno())
+            return value
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
     def setting(self, key, default=None):
         with self.lock:
@@ -1011,8 +1090,15 @@ class Store:
             self.con.execute('DELETE FROM report WHERE id NOT IN (SELECT id FROM report ORDER BY ts DESC LIMIT 5000)')
 
     def close(self):
+        """Release the sqlite handle. Idempotent and safe to call twice."""
         with self.lock:
-            self.con.close()
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                self.con.close()
+            except sqlite3.Error:
+                pass
 
 
 def normalize_report(raw):
@@ -1585,12 +1671,14 @@ class Engine:
         return {'requested': True, 'response': response}
 
     def close(self):
+        if getattr(self, '_closed', False):
+            return
+        self._closed = True
         self.stop.set(); self.wake.set()
         if self.thread:
-            self.thread.join(timeout=2)
-        # Do not close the store underneath a collector still unwinding I/O.
-        if not self.thread or not self.thread.is_alive():
-            self.store.close()
+            self.thread.join(timeout=5)
+        # Always release the observer DB once the collector has stopped.
+        self.store.close()
 
 class OAuth:
     """Single-owner optional OAuth authorization-code + S256 PKCE flow.
