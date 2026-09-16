@@ -1,0 +1,53 @@
+{
+  "version": "4.0.0",
+  "verified_date": "2026-09-16",
+  "environment": {
+    "os": "Linux",
+    "python": "3.13.5",
+    "browser": "Chromium (headless; HTML/JS injection and local fixture HTTP adapter; browser navigation policy unchanged)"
+  },
+  "regression_tests": {
+    "passed": 91,
+    "data": "Synthetic temporary databases, logs, HTTP endpoints and OAuth clients only."
+  },
+  "built_in_self_tests": {
+    "passed": 10
+  },
+  "browser_checks": {
+    "passed": 25,
+    "checks": [
+      "Owner-authenticated UI with local HTTP fixture transport",
+      "Untrusted source text cannot execute script",
+      "Rendered overview",
+      "Rendered projects",
+      "Rendered agents",
+      "Rendered graph",
+      "Rendered timeline",
+      "Rendered analytics",
+      "Rendered alerts",
+      "Rendered integrations",
+      "Rendered settings",
+      "Agent search filter",
+      "Inspector loads details safely",
+      "Owner assessment persisted",
+      "Graph nodes, zoom and fit",
+      "JSON export downloadable",
+      "Period analytics filtering",
+      "Bounded scanner returns selectable results",
+      "Copyable stdio configuration generated",
+      "Settings editor validates and saves",
+      "Light theme",
+      "Mobile page no horizontal overflow",
+      "Mobile graph, analytics and integration bounds",
+      "Unauthenticated browser shows no session data",
+      "No uncaught JavaScript errors"
+    ]
+  },
+  "limitations": [
+    "No actual Windows execution of the CMD launchers.",
+    "No access to the user OpenCode database or live sessions in these tests.",
+    "No end-to-end login to the user ChatGPT or Codex account.",
+    "OAuth is a single-owner local implementation, not an independently audited identity product."
+  ],
+  "source_sha256": "d027cf0a7accd35a8c6646ddd8c2d75a655fac52f46242ffc327d115fcad1b91"
+}
