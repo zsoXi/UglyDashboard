@@ -74,10 +74,16 @@ class Store:
     def secret(self, name, repair=False):
         """Return a stable local secret, creating it once if absent.
 
-        Recovery is explicit. A file that is empty, truncated or corrupt raises
-        :class:`SecretError` unless ``repair=True`` is passed, in which case the
-        damaged file is preserved as ``<name>.corrupt-<ts>.bak`` before a fresh
-        secret is generated. Credentials are never silently rotated.
+        Recovery is explicit and fail-closed:
+
+        * a file that cannot be read (permissions, locking, I/O) raises
+          :class:`SecretError` and is never touched, even with ``repair=True``;
+        * a file whose content is empty/truncated/corrupt raises
+          :class:`SecretError` unless ``repair=True``, in which case it is
+          atomically moved to ``<name>.corrupt-<ts>-<rand>.bak`` before a fresh
+          secret is generated. If the file cannot be moved, the original is left
+          in place and an error is raised. Credentials are never silently
+          rotated or deleted.
         """
         p = self.directory / name
         if p.exists():
@@ -91,61 +97,88 @@ class Store:
 
     @staticmethod
     def _read_secret(p):
+        """Return the secret text, ``None`` if invalid, or raise on unreadable.
+
+        A permission/IO error is deliberately distinct from corrupt content:
+        corruption may be repairable, but an unreadable file must never cause a
+        rotation that could hide the underlying problem.
+        """
         try:
-            value = p.read_text('utf-8').strip()
-        except (OSError, UnicodeDecodeError):
+            raw = p.read_text('utf-8')
+        except UnicodeDecodeError:
             return None
+        except OSError as exc:
+            raise SecretError(p, f'secret file is unreadable ({exc.strerror or exc})') from exc
+        value = raw.strip()
         return value if SECRET_RE.match(value) else None
 
     def _quarantine_secret(self, p):
-        backup = p.with_name(f'{p.name}.corrupt-{int(time.time())}.bak')
-        try:
-            os.replace(str(p), str(backup))
-            return backup
-        except OSError:
+        """Atomically move a damaged secret aside; never delete or overwrite."""
+        stamp = time.strftime('%Y%m%d-%H%M%S')
+        for _ in range(64):
+            backup = p.with_name(f'{p.name}.corrupt-{stamp}-{secrets.token_hex(4)}.bak')
             try:
-                p.unlink()
-            except OSError:
-                pass
-            return None
+                os.replace(str(p), str(backup))
+                return backup
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                raise SecretError(
+                    p, f'cannot quarantine corrupt secret; original left untouched ({exc.strerror or exc})') from exc
+        raise SecretError(p, 'cannot quarantine corrupt secret; original left untouched (no free backup name)')
 
     def _create_secret(self, p):
         value = secrets.token_urlsafe(36)
-        tmp = p.with_name(f'{p.name}.tmp-{os.getpid()}-{secrets.token_hex(4)}')
+        tmp = p.with_name(f'{p.name}.tmp-{os.getpid()}-{secrets.token_hex(6)}')
+        fd = None
         try:
             fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except OSError as exc:
-            raise SecretError(p, f'cannot write secret ({exc.strerror or exc})') from exc
-        try:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                fd = None
                 f.write(value + '\n')
                 f.flush()
                 os.fsync(f.fileno())
-            try:
-                os.link(str(tmp), str(p))
-            except FileExistsError:
-                existing = self._read_secret(p)
-                if existing is None:
-                    raise SecretError(p, 'secret file exists but is unreadable')
-                return existing
-            except OSError:
-                try:
-                    fd2 = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                except FileExistsError:
-                    existing = self._read_secret(p)
-                    if existing is None:
-                        raise SecretError(p, 'secret file exists but is unreadable')
-                    return existing
-                with os.fdopen(fd2, 'w', encoding='utf-8') as f2:
-                    f2.write(value + '\n')
-                    f2.flush()
-                    os.fsync(f2.fileno())
-            return value
+            return self._publish_secret(tmp, p, value)
+        except SecretError:
+            raise
+        except OSError as exc:
+            raise SecretError(p, f'cannot write secret ({exc.strerror or exc})') from exc
         finally:
+            if fd is not None:
+                os.close(fd)
             try:
                 tmp.unlink()
             except OSError:
                 pass
+
+    @staticmethod
+    def _publish_secret(tmp, p, value):
+        """Publish a fully written temp file without clobbering or partial writes."""
+        try:
+            os.link(str(tmp), str(p))
+            return value
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            # Hardlinks are unavailable (e.g. some network/FAT volumes). On
+            # Windows os.rename is atomic and refuses an existing destination;
+            # on POSIX os.rename would clobber, so fail closed instead of
+            # publishing a partially written file.
+            if os.name != 'nt':
+                raise SecretError(
+                    p, f'cannot publish secret atomically ({exc.strerror or exc})') from exc
+            try:
+                os.rename(str(tmp), str(p))
+                return value
+            except FileExistsError:
+                pass
+            except OSError as exc2:
+                raise SecretError(
+                    p, f'cannot publish secret atomically ({exc2.strerror or exc2})') from exc2
+        existing = Store._read_secret(p)
+        if existing is None:
+            raise SecretError(p, 'secret file exists but is unreadable or corrupt')
+        return existing
 
     def setting(self, key, default=None):
         with self.lock:
@@ -225,3 +258,10 @@ class Store:
                 self.con.close()
             except sqlite3.Error:
                 pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False

@@ -261,6 +261,49 @@ class StoreTests(Base):
     @unittest.skipUnless(os.name == 'posix', 'POSIX file-mode assertion; Windows uses account ACLs.')
     def test_restricted_secret_permissions(self):
         s=m.Store(self.root);self.addCleanup(s.close);s.secret('key');self.assertEqual((self.root/'key').stat().st_mode & 0o777,0o600)
+    def test_secret_corrupt_requires_explicit_repair(self):
+        import mission_control.store as store_mod
+        s=m.Store(self.root);self.addCleanup(s.close);(self.root/'key').write_text('short','utf-8')
+        with self.assertRaises(m.SecretError):s.secret('key')
+        self.assertEqual((self.root/'key').read_text('utf-8'),'short')
+        value=s.secret('key',repair=True)
+        self.assertNotEqual(value,'short');self.assertGreater(len(value),32)
+        backups=list(self.root.glob('key.corrupt-*.bak'));self.assertEqual(len(backups),1)
+        self.assertEqual(backups[0].read_text('utf-8'),'short')
+        self.assertFalse(list(self.root.glob('key.tmp-*')))
+    def test_secret_repair_rename_failure_keeps_original(self):
+        import mission_control.store as store_mod
+        s=m.Store(self.root);self.addCleanup(s.close);(self.root/'key').write_text('short','utf-8')
+        with patch.object(store_mod.os,'replace',side_effect=OSError(13,'denied')):
+            with self.assertRaises(m.SecretError):s.secret('key',repair=True)
+        self.assertEqual((self.root/'key').read_text('utf-8'),'short')
+        self.assertFalse(list(self.root.glob('key.corrupt-*.bak')))
+    def test_secret_unreadable_is_not_rotated(self):
+        s=m.Store(self.root);self.addCleanup(s.close);(self.root/'key').write_text('a'*40,'utf-8')
+        with patch.object(Path,'read_text',side_effect=PermissionError(13,'denied')):
+            with self.assertRaises(m.SecretError):s.secret('key',repair=True)
+        self.assertEqual((self.root/'key').read_text('utf-8'),'a'*40)
+        self.assertFalse(list(self.root.glob('key.corrupt-*.bak')))
+    def test_secret_create_failure_leaves_no_partial_file(self):
+        import mission_control.store as store_mod
+        s=m.Store(self.root);self.addCleanup(s.close)
+        with patch.object(store_mod.os,'open',side_effect=OSError(28,'no space')):
+            with self.assertRaises(m.SecretError):s.secret('key')
+        self.assertFalse((self.root/'key').exists());self.assertFalse(list(self.root.glob('key.tmp-*')))
+    def test_secret_publish_fail_closed_without_hardlink(self):
+        import mission_control.store as store_mod
+        s=m.Store(self.root);self.addCleanup(s.close)
+        with patch.object(store_mod.os,'name','posix'),patch.object(store_mod.os,'link',side_effect=OSError(1,'no hardlinks')):
+            with self.assertRaises(m.SecretError):s.secret('key')
+        self.assertFalse((self.root/'key').exists());self.assertFalse(list(self.root.glob('key.tmp-*')))
+    def test_secret_concurrent_creation_single_value(self):
+        from concurrent.futures import ThreadPoolExecutor
+        s=m.Store(self.root);self.addCleanup(s.close)
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            values=list(pool.map(lambda _:s.secret('conc'),range(32)))
+        self.assertEqual(len(set(values)),1);self.assertGreater(len(values[0]),32)
+        self.assertFalse(list(self.root.glob('conc.tmp-*')))
+        self.assertFalse(list(self.root.glob('conc.corrupt-*.bak')))
 
 
 class ProtocolTests(Base):
@@ -269,7 +312,7 @@ class ProtocolTests(Base):
         self.srv=m.Server(('127.0.0.1',0),self.e);self.port=self.srv.server_address[1];self.url=f'http://127.0.0.1:{self.port}'
         self.t=threading.Thread(target=self.srv.serve_forever,daemon=True);self.t.start();self.http=build_opener(ProxyHandler({}),m.NoRedirect())
     def tearDown(self):
-        self.srv.shutdown();self.srv.server_close();self.t.join();self.e.close();super().tearDown()
+        self.e.close();self.t.join();super().tearDown()
     def request(self,path,body=None,token='owner',headers=None,form=False):
         h=dict(headers or {})
         if token=='owner':h['Authorization']='Bearer '+self.e.control_token
@@ -282,7 +325,7 @@ class ProtocolTests(Base):
         req=Request(self.url+path,data=data,headers=h)
         try:
             r=self.http.open(req,timeout=5);status=r.status;headers=dict(r.headers);raw=r.read();r.close()
-        except HTTPError as e:status=e.code;headers=dict(e.headers);raw=e.read()
+        except HTTPError as e:status=e.code;headers=dict(e.headers);raw=e.read();e.close()
         try:out=json.loads(raw)
         except ValueError:out=raw.decode()
         return status,out,headers
@@ -327,7 +370,7 @@ class ProtocolTests(Base):
     def test_malformed_json_rejected(self):
         req=Request(self.url+'/mcp',data=b'{',headers={'Authorization':'Bearer '+self.e.mcp_token,'Content-Type':'application/json'})
         with self.assertRaises(HTTPError) as cx:self.http.open(req)
-        self.assertEqual(cx.exception.code,400)
+        self.assertEqual(cx.exception.code,400);cx.exception.close()
     def test_oauth_off_by_default(self):self.assertEqual(self.request('/.well-known/oauth-protected-resource',token=None)[0],403)
     def setup_oauth(self):
         cfg=self.e.config();cfg['public_origin']='https://mc.example.test';self.e.save_config(cfg)

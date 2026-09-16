@@ -111,11 +111,23 @@ def derive_alerts(sessions, cfg, sources):
 
 
 class Engine:
-    def __init__(self, directory, overrides=None):
+    """Collects local sources into an immutable, publishable snapshot.
+
+    Lock lifecycle
+    --------------
+    ``lock`` (RLock) protects the mutable ``sessions`` / ``snapshot`` / ``cfg``
+    state and the caches. ``poll_lock`` serialises collector cycles. Network,
+    database and git I/O always happens *outside* ``lock``; handlers only take
+    ``lock`` to read a reference or swap the published snapshot, never to run
+    expensive work. ``view()`` / ``detail()`` copy the published state outside
+    the lock so request handlers never block the collector.
+    """
+
+    def __init__(self, directory, overrides=None, repair_secrets=False):
         self.store = Store(directory)
-        self.control_token = self.store.secret('owner.token')
-        self.mcp_token = self.store.secret('mcp.token')
-        self.pairing_key = self.store.secret('pairing.key')
+        self.control_token = self.store.secret('owner.token', repair=repair_secrets)
+        self.mcp_token = self.store.secret('mcp.token', repair=repair_secrets)
+        self.pairing_key = self.store.secret('pairing.key', repair=repair_secrets)
         self.config_path = self.store.directory / 'config.json'
         if self.config_path.exists():
             raw = json.loads(self.config_path.read_text('utf-8'))
@@ -131,7 +143,19 @@ class Engine:
         self.sessions = {}; self.previous_states = {}
         self.snapshot = {'version': VERSION, 'generated_at': 0, 'refreshing': True, 'sessions': [], 'projects': [], 'sources': [], 'alerts': [], 'definitions': [], 'router': [], 'coverage': []}
         self.started = now_ms(); self.port = 8765; self.thread = None
+        self.server = None
+        self._closed = False
+        self._facts = []
+        self._facts_revision = 0
         self.save_config(self.cfg)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
 
     def config(self):
         with self.lock:
@@ -604,11 +628,26 @@ class Engine:
         return {'requested': True, 'response': response}
 
     def close(self):
+        """Deterministically stop the collector, drain HTTP work, then close the DB."""
         if getattr(self, '_closed', False):
             return
         self._closed = True
         self.stop.set(); self.wake.set()
         if self.thread:
             self.thread.join(timeout=5)
-        # Always release the observer DB once the collector has stopped.
+        server = getattr(self, 'server', None)
+        if server is not None:
+            try:
+                server.shutdown()
+            except Exception:
+                pass
+            try:
+                server.wait_idle(5)
+            except Exception:
+                pass
+            try:
+                server.server_close()
+            except Exception:
+                pass
+        # Always release the observer DB once no handler or collector can use it.
         self.store.close()

@@ -14,6 +14,7 @@ import math
 import os
 import re
 import secrets
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -58,29 +59,65 @@ CSS = _web_asset('style.css', '')
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
     request_queue_size = 32
+    # On Windows SO_REUSEADDR lets a second process silently bind a port that is
+    # already in use (hijacking), which hides "port busy". Use exclusive binding
+    # there; keep SO_REUSEADDR on POSIX only to avoid TIME_WAIT restarts.
+    allow_reuse_address = (os.name != 'nt')
+
+    def server_bind(self):
+        if os.name == 'nt':
+            try:
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            except (AttributeError, OSError):
+                pass
+        super().server_bind()
 
     def __init__(self, address, engine):
         self.engine = engine; self.oauth = OAuth(engine); self.mcp = MCP(engine)
         self.slots = threading.BoundedSemaphore(32)
         self.last_request = time.monotonic(); self.rate_lock = threading.Lock(); self.rate = {}
+        self._active = 0
+        self._active_cond = threading.Condition()
         super().__init__(address, Handler)
         engine.port = self.server_address[1]
+        engine.server = self
+
+    def _begin(self):
+        with self._active_cond:
+            self._active += 1
+
+    def _end(self):
+        with self._active_cond:
+            self._active -= 1
+            if self._active <= 0:
+                self._active_cond.notify_all()
+
+    def wait_idle(self, timeout=5.0):
+        """Block until no request handler is running (or timeout)."""
+        deadline = time.monotonic() + timeout
+        with self._active_cond:
+            while self._active > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._active_cond.wait(remaining)
+            return True
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):
             request.close(); return
+        self._begin()
         try:
             super().process_request(request, client_address)
         except BaseException:
-            self.slots.release(); raise
+            self.slots.release(); self._end(); raise
 
     def process_request_thread(self, request, client_address):
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self.slots.release()
+            self.slots.release(); self._end()
 
     def rate_ok(self, key, maximum=80):
         now = time.monotonic()

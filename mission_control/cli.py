@@ -143,6 +143,31 @@ def builtin_self_test():
     return 0 if result.wasSuccessful() else 1
 
 
+def _reusable_instance(port, token):
+    """True only for a healthy Mission Control app that accepts our owner token."""
+    try:
+        health = local_json(f'http://127.0.0.1:{port}/health', timeout=1)
+        if health.get('application') != 'opencode-mission-control':
+            return False
+        local_json(f'http://127.0.0.1:{port}/api/overview', timeout=2,
+                   headers={'Authorization': 'Bearer ' + token})
+        return True
+    except Exception:
+        return False
+
+
+def _serves_shell(port):
+    """A reusable instance must actually render the dashboard, not just /health."""
+    try:
+        with LOCAL_HTTP.open(Request(f'http://127.0.0.1:{port}/'), timeout=2) as res:
+            ctype = (res.headers.get('Content-Type') or '').lower()
+            head = res.read(4096)
+            status = res.status
+        return status == 200 and 'text/html' in ctype and b'<html' in head.lower()
+    except Exception:
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=APP + ' — local observer, single Python file, no packages required.')
     parser.add_argument('db', nargs='?', help='Optional OpenCode SQLite path (old CLI compatibility).')
@@ -185,20 +210,29 @@ def main():
     try:
         server = Server(('127.0.0.1', args.port), engine)
     except OSError as ex:
-        # Reuse only a server that both identifies itself and accepts this
-        # observer's OWNER token. Never send an owner fragment to an unknown app.
-        try:
-            health = local_json(f'http://127.0.0.1:{args.port}/health', timeout=1)
-            if health.get('application') != 'opencode-mission-control':
-                raise ValueError('Different application on this port.')
-            local_json(f'http://127.0.0.1:{args.port}/api/overview', timeout=2, headers={'Authorization': 'Bearer ' + engine.control_token})
+        # 1) A healthy instance of this exact app that accepts our OWNER token
+        #    and actually renders the dashboard shell can be reused. Never send
+        #    an owner token to an unknown app, and never reuse a broken instance.
+        if _reusable_instance(args.port, engine.control_token) and _serves_shell(args.port):
             if should_open:
                 webbrowser.open(f'http://127.0.0.1:{args.port}/#access={engine.control_token}')
             engine.close()
             return 0
-        except Exception:
+        # 2) Otherwise (foreign app, stale copy or broken instance) start on the
+        #    next free loopback port so the launcher always yields a running app.
+        server = None
+        for candidate in range(args.port + 1, min(args.port + 51, 65536)):
+            try:
+                server = Server(('127.0.0.1', candidate), engine)
+                LOG.warning('Port %s is in use; started on %s instead.', args.port, candidate)
+                if not args.quiet and sys.stdout:
+                    print(f'Port {args.port} is in use; using {candidate} instead.')
+                break
+            except OSError:
+                continue
+        if server is None:
             engine.close()
-            raise RuntimeError(f'Port {args.port} is in use. Close the other app or run with --port 8766. Original error: {ex}') from ex
+            raise RuntimeError(f'Port {args.port} is in use and no free port was found in {args.port + 1}-{args.port + 50}. Original error: {ex}') from ex
     runtime = {'port': server.server_address[1], 'pid': os.getpid(), 'version': VERSION, 'started': now_ms()}
     (engine.store.directory / 'runtime.json').write_text(json.dumps(runtime), 'utf-8')
     url = f'http://127.0.0.1:{engine.port}'
