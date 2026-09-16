@@ -114,7 +114,12 @@ def read_opencode(path, limit=1000, budget_seconds=None):
 
         processed = 0
         for s in list(sessions.values()):
-            if processed and (read_state["hit"] or time.monotonic() > deadline):
+            # A non-positive budget must deterministically stop after the newest
+            # session: comparing monotonic() > deadline is unreliable on coarse
+            # clocks (Windows uses ~15 ms ticks), so an explicit guard is used.
+            if processed and (
+                soft_budget <= 0 or read_state["hit"] or time.monotonic() > deadline
+            ):
                 deadline_exceeded = True
                 break
             message_info = {}

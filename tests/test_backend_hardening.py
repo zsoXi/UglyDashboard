@@ -219,6 +219,9 @@ class ScaleCoverageTests(EngineBase):
         sessions, _dirs, coverage = mc.read_opencode(db, budget_seconds=0.0)
         # Never raises, always returns a tuple, and keeps the newest session.
         self.assertGreaterEqual(len(sessions), 1)
+        # An already-expired budget stops after the newest session and reports
+        # the truncation explicitly (deterministic even on coarse clocks).
+        self.assertLess(coverage["loaded_sessions"], coverage["total_sessions"])
         self.assertTrue(coverage["deadline_exceeded"])
         self.assertTrue(coverage["truncated"])
 

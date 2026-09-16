@@ -25,7 +25,11 @@ class SecretError(RuntimeError):
     """
 
     def __init__(self, path, reason):
-        self.path = Path(path)
+        # Keep the path as given. Coercing through Path() here would consult
+        # os.name at call time on some Python versions, which breaks under
+        # tests that simulate POSIX on Windows. Every call site already
+        # passes a Path.
+        self.path = path
         self.reason = reason
         super().__init__(f"{reason}: {self.path}")
 
