@@ -84,16 +84,68 @@ class Store:
           secret is generated. If the file cannot be moved, the original is left
           in place and an error is raised. Credentials are never silently
           rotated or deleted.
+
+        Creation and repair are serialised across threads and processes with an
+        exclusive lock file, and the decision is re-checked after acquiring it.
+        A process that loses the race therefore reads the winner's secret instead
+        of quarantining it.
         """
         p = self.directory / name
-        if p.exists():
-            value = self._read_secret(p)
+        value = self._read_if_present(p)
+        if value is not None:
+            return value
+        if p.exists() and not repair:
+            raise SecretError(p, 'secret file is empty, truncated or corrupt')
+        fd, lock_path = self._acquire_secret_lock(name)
+        try:
+            # Re-check under the lock: another process may have just repaired it.
+            value = self._read_if_present(p)
             if value is not None:
                 return value
-            if not repair:
-                raise SecretError(p, 'secret file is empty, truncated or corrupt')
-            self._quarantine_secret(p)
-        return self._create_secret(p)
+            if p.exists():
+                if not repair:
+                    raise SecretError(p, 'secret file is empty, truncated or corrupt')
+                self._quarantine_secret(p)
+            return self._create_secret(p)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(str(lock_path))
+            except OSError:
+                pass
+
+    def _read_if_present(self, p):
+        if not p.exists():
+            return None
+        return self._read_secret(p)
+
+    def _acquire_secret_lock(self, name, timeout=10.0, poll=0.02):
+        """Exclusive cross-process lock for creating/repairing one secret."""
+        lock_path = self.directory / (name + '.lock')
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                try:
+                    os.write(fd, f'{os.getpid()} {int(time.time())}'.encode())
+                except OSError:
+                    pass
+                return fd, lock_path
+            except FileExistsError:
+                try:
+                    if time.time() - os.stat(str(lock_path)).st_mtime > 30:
+                        os.unlink(str(lock_path))
+                        continue
+                except OSError:
+                    pass
+                if time.monotonic() >= deadline:
+                    raise SecretError(lock_path, 'timed out waiting for another secret repair to finish')
+                time.sleep(poll)
+            except OSError as exc:
+                raise SecretError(lock_path, f'cannot create secret lock ({exc.strerror or exc})') from exc
 
     @staticmethod
     def _read_secret(p):

@@ -306,6 +306,68 @@ class StoreTests(Base):
         self.assertFalse(list(self.root.glob('conc.corrupt-*.bak')))
 
 
+class LifecycleTests(Base):
+    """Deterministic shutdown: no DB close while a worker still owns it."""
+
+    def engine(self):
+        return m.Engine(self.root/'state',{'db_paths':[],'codex_homes':[],'router_events':[],'opencode_urls':[],'git_enabled':False})
+
+    def test_close_times_out_without_closing_db_when_collector_stuck(self):
+        e=self.engine();self.addCleanup(e.store.close)
+        started=threading.Event()
+        def stuck():
+            started.set();time.sleep(30)
+        e.thread=threading.Thread(target=stuck,daemon=True);e.thread.start();self.assertTrue(started.wait(2))
+        with self.assertRaises(m.LifecycleError):e.close(timeout=0.1)
+        # The DB must still be usable: close refused to yank it from a live thread.
+        self.assertEqual(e.store.setting('probe',1),1)
+
+    def test_close_is_idempotent_across_simultaneous_callers(self):
+        e=self.engine()
+        results=[];errors=[]
+        def worker():
+            try:results.append(e.close(timeout=5))
+            except Exception as exc:errors.append(exc)
+        threads=[threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:t.start()
+        for t in threads:t.join(10)
+        self.assertEqual(errors,[])
+        self.assertEqual(results,[True]*8)
+
+    def test_close_after_server_constructed_before_serving(self):
+        e=self.engine()
+        m.Server(('127.0.0.1',0),e)
+        # shutdown() must not be called while serve_forever is not running.
+        self.assertTrue(e.close(timeout=5))
+
+    def test_close_waits_for_active_scanner(self):
+        import mission_control.engine as eng
+        e=self.engine()
+        gate=threading.Event()
+        with patch.object(eng,'scan_paths',side_effect=lambda *a,**k: (gate.wait(5), {'items':[],'errors':[],'truncated':False})[1]):
+            e.begin_scan([str(self.root)],1)
+            gate.set()
+            self.assertTrue(e.close(timeout=5))
+
+    def test_close_fails_when_scanner_stuck(self):
+        import mission_control.engine as eng
+        e=self.engine();self.addCleanup(e.store.close)
+        gate=threading.Event()
+        with patch.object(eng,'scan_paths',side_effect=lambda *a,**k: (gate.wait(30), {'items':[],'errors':[],'truncated':False})[1]):
+            e.begin_scan([str(self.root)],1)
+            with self.assertRaises(m.LifecycleError):e.close(timeout=0.2)
+        gate.set()
+        if e._scan_thread:e._scan_thread.join(5)
+
+    def test_constructor_failure_closes_store(self):
+        import mission_control.engine as eng
+        with patch.object(eng,'validate_config',side_effect=ValueError('bad config')):
+            with self.assertRaises(ValueError):m.Engine(self.root/'state',{})
+        db=self.root/'state'/'observer.sqlite'
+        self.assertTrue(db.exists())
+        os.unlink(str(db))  # would raise WinError 32 if the Store connection leaked
+
+
 class ProtocolTests(Base):
     def setUp(self):
         super().setUp();self.e=m.Engine(self.root/'state',{'db_paths':[],'codex_homes':[],'router_events':[],'opencode_urls':[],'git_enabled':False});self.e.poll()

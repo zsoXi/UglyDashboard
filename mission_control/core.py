@@ -54,6 +54,10 @@ MAX_RESPONSE = 16 * 1024 * 1024
 
 MAX_LINE = 4 * 1024 * 1024
 
+# Per-session usage ledger cap. Session totals remain exact; the event-level
+# ledger is truncated (oldest first) so analytics stay predictably bounded.
+MAX_SESSION_USAGE_EVENTS = 4000
+
 
 HOME = Path.home()
 
@@ -62,6 +66,10 @@ STATE_DEFAULT = HOME / '.opencode-mission-control'
 
 
 LOG = logging.getLogger('mission-control')
+
+
+class LifecycleError(RuntimeError):
+    """Raised when a thread or server cannot be stopped deterministically."""
 
 # Repository/install root of the package, used to resolve the stable thin
 # launcher regardless of which module is executing.
@@ -391,7 +399,8 @@ def make_session(source, sid, title='', directory=''):
             'usage': zero_usage(), 'usage_known': False, 'cost': None, 'messages': 0,
             'prompt': '', 'tools': [], 'files': [], 'usage_events': [], 'events': [],
             'model_usage': {}, 'context_tokens': None, 'context_limit': None,
-            'errors': 0, 'retry_count': 0, 'warnings': [], '_completed': 0, '_error_at': 0}
+            'errors': 0, 'retry_count': 0, 'warnings': [], '_completed': 0, '_error_at': 0,
+            'usage_events_dropped': 0}
 
 
 def add_event(s, kind, text, ts, eid='', detail=None):
@@ -413,7 +422,16 @@ def record_usage(s, usage, ts, model=None, provider=None, cost=None):
     if isinstance(cost, (int, float)) and math.isfinite(cost) and cost >= 0:
         m['cost'] = (m['cost'] or 0) + cost
         s['cost'] = (s['cost'] or 0) + cost
-    s['usage_events'].append({'ts': ts, 'model': name, 'provider': prov, **usage})
+    events = s['usage_events']
+    events.append({'ts': ts, 'model': name, 'provider': prov, **usage})
+    # Bounded per-session history: totals stay exact, only the per-event ledger is
+    # capped so analytics work is predictable. Dropped records are counted so the
+    # truncation is visible in coverage instead of silently distorting per-day
+    # breakdowns.
+    if len(events) > MAX_SESSION_USAGE_EVENTS:
+        dropped = len(events) - MAX_SESSION_USAGE_EVENTS
+        del events[:dropped]
+        s['usage_events_dropped'] = s.get('usage_events_dropped', 0) + dropped
 
 
 def bounded_append(items, value, limit=100):

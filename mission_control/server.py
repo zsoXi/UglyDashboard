@@ -79,9 +79,41 @@ class Server(ThreadingHTTPServer):
         self.last_request = time.monotonic(); self.rate_lock = threading.Lock(); self.rate = {}
         self._active = 0
         self._active_cond = threading.Condition()
+        self._serving = threading.Event()
+        self._serve_thread = None
+        self._stop_lock = threading.Lock()
         super().__init__(address, Handler)
         engine.port = self.server_address[1]
         engine.server = self
+
+    def serve_forever(self, poll_interval=0.5):
+        """Record that the accept loop is live so shutdown() is only called when valid."""
+        self._serve_thread = threading.current_thread()
+        self._serving.set()
+        try:
+            super().serve_forever(poll_interval)
+        finally:
+            self._serving.clear()
+
+    def request_stop(self, timeout=5.0):
+        """Stop the accept loop if it is running, drain handlers, then close.
+
+        ``ThreadingHTTPServer.shutdown()`` blocks forever unless
+        ``serve_forever()`` is running on another thread, so it is only called
+        when this instance is actually serving. A slow handler or accept loop
+        raises :class:`LifecycleError` instead of closing underneath live work.
+        """
+        with self._stop_lock:
+            if self._serving.is_set():
+                self.shutdown()
+                thread = self._serve_thread
+                if thread is not None and thread is not threading.current_thread():
+                    thread.join(timeout)
+                    if thread.is_alive():
+                        raise LifecycleError(f'HTTP server did not stop within {timeout}s')
+            if not self.wait_idle(timeout):
+                raise LifecycleError(f'HTTP handlers still active after {timeout}s; not closing')
+            self.server_close()
 
     def _begin(self):
         with self._active_cond:

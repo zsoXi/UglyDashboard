@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 import webbrowser
-from collections import Counter, defaultdict, deque
+from collections import Counter, OrderedDict, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -110,44 +110,197 @@ def derive_alerts(sessions, cfg, sources):
     return sorted(alerts, key=lambda a: (a['severity'] != 'danger', a['kind']))
 
 
+def build_fact(s):
+    """Compact, read-only analytics view of a single published session."""
+    daily = defaultdict(zero_usage)
+    daily_models = defaultdict(dict)
+    for e in s['usage_events']:
+        d = day(e['ts'])
+        if not d:
+            continue
+        add_usage(daily[d], e)
+        key = (e['provider'], e['model'])
+        row = daily_models[d].setdefault(key, {'usage': zero_usage(), 'requests': 0})
+        add_usage(row['usage'], e)
+        row['requests'] += 1
+    assessment = s.get('assessment')
+    return {
+        'id': s['id'], 'source': s['source'], 'updated': s['updated'],
+        'project': path_key(s['directory']), 'directory': s['directory'],
+        'group': (assessment or {}).get('task_group') or s.get('task_group', ''),
+        'model': s['model'], 'provider': s['provider'],
+        'usage_total': s['usage']['total'], 'files': tuple(s['files']),
+        'errors': s['errors'], 'retries': s['retry_count'],
+        'model_usage': tuple({'model': m['model'], 'provider': m['provider'], 'usage': dict(m['usage']),
+                              'cost': m.get('cost'), 'requests': m['requests']}
+                             for m in s['model_usage'].values()),
+        'assessment': copy.deepcopy(assessment) if assessment else None,
+        'daily': {d: dict(u) for d, u in daily.items()},
+        'daily_models': {d: {k: dict(v) for k, v in m.items()} for d, m in daily_models.items()},
+        'usage_events_dropped': s.get('usage_events_dropped', 0),
+    }
+
+
+def build_facts(rows):
+    """Compactly pre-aggregate published sessions for analytics.
+
+    Returns shared, read-only structures computed once per published revision.
+    Per-day and per-day-per-model usage are summed here so a request never walks
+    the full ``usage_events`` history again, and nothing needs a deep copy of the
+    whole session graph.
+    """
+    return [build_fact(s) for s in rows]
+
+
+def compute_analytics(facts, cutoff, cfg, days, project, task_group, source):
+    """Pure aggregation over pre-built facts (no session deep copies)."""
+    models = {}
+    daily = defaultdict(zero_usage)
+    filetotals = defaultdict(float)
+    selected = 0
+    token_total = 0
+    dropped = 0
+    cutoff_day = day(cutoff) if cutoff else ''
+
+    def modelrow(model, provider):
+        key = provider + '/' + model
+        return models.setdefault(key, {'id': key, 'model': model, 'provider': provider, 'usage': zero_usage(), 'sessions': set(), 'requests': 0,
+                                       'recorded_cost': None, 'estimated_cost': None, 'priced_tokens': 0, 'assessments': [], 'errors': 0, 'retries': 0})
+
+    for s in facts:
+        if s['source'] == 'reported' or (source and source != s['source']) or (project and s['project'] != path_key(project)):
+            continue
+        if task_group and s['group'] != task_group:
+            continue
+        if cutoff and s['updated'] < cutoff:
+            continue
+        selected += 1
+        dropped += s.get('usage_events_dropped', 0)
+        if cutoff:
+            session_tokens = 0
+            for d, u in s['daily'].items():
+                if d >= cutoff_day:
+                    add_usage(daily[d], u)
+                    session_tokens += u['total']
+            bymodel = {}
+            for d, entries in s['daily_models'].items():
+                if d < cutoff_day:
+                    continue
+                for (model, provider), row in entries.items():
+                    out = bymodel.setdefault(provider + '/' + model, {'model': model, 'provider': provider, 'usage': zero_usage(), 'cost': None, 'requests': 0})
+                    add_usage(out['usage'], row['usage'])
+                    out['requests'] += row['requests']
+        else:
+            for d, u in s['daily'].items():
+                add_usage(daily[d], u)
+            session_tokens = s['usage_total']
+            bymodel = {m['provider'] + '/' + m['model']: {'model': m['model'], 'provider': m['provider'], 'usage': m['usage'],
+                                                         'cost': m['cost'], 'requests': m['requests']} for m in s['model_usage']}
+        token_total += session_tokens
+        if s['files']:
+            for f in s['files']:
+                filetotals[f] += session_tokens / len(s['files'])
+        for entry in bymodel.values():
+            r = modelrow(entry['model'], entry['provider'])
+            add_usage(r['usage'], entry['usage'])
+            r['sessions'].add(s['id'])
+            r['requests'] += entry['requests']
+            if entry.get('cost') is not None:
+                r['recorded_cost'] = (r['recorded_cost'] or 0) + entry['cost']
+            pricing = cfg['pricing'].get(r['id']) or cfg['pricing'].get(r['model'])
+            if pricing:
+                u = entry['usage']
+                components = {'input': u['input'], 'output': u['output'] + u['reasoning'], 'cache_read': u['cache_read'], 'cache_write': u['cache_write']}
+                if all(v == 0 or k in pricing for k, v in components.items()):
+                    estimate = sum(v * pricing.get(k, 0) / 1e6 for k, v in components.items())
+                    r['estimated_cost'] = (r['estimated_cost'] or 0) + estimate
+                    r['priced_tokens'] += u['total']
+            # Error and retry counts are session-level, not fabricated per-model splits.
+            if len(s['model_usage']) == 1:
+                r['errors'] += s['errors']
+                r['retries'] += s['retries']
+        assessment = s['assessment']
+        if assessment:
+            r = modelrow(assessment.get('model') or s['model'], assessment.get('provider') or s['provider'])
+            r['assessments'].append(assessment)
+    mrows = []
+    for r in models.values():
+        r['sessions'] = len(r['sessions'])
+        assessed = r.pop('assessments')
+        verified_tests = [a for a in assessed if isinstance(a.get('tests_passed'), bool)]
+        fixes = [a['review_fixes'] for a in assessed if isinstance(a.get('review_fixes'), int)]
+        elapsed = [a['duration_seconds'] for a in assessed if isinstance(a.get('duration_seconds'), (int, float))]
+        r.update(assessed_tasks=len(assessed), test_samples=len(verified_tests),
+                 test_pass_rate=sum(a['tests_passed'] for a in verified_tests) / len(verified_tests) if verified_tests else None,
+                 avg_review_fixes=sum(fixes) / len(fixes) if fixes else None,
+                 avg_duration_seconds=sum(elapsed) / len(elapsed) if elapsed else None,
+                 tokens_per_session=r['usage']['total'] / r['sessions'] if r['sessions'] else None)
+        mrows.append(r)
+    activity = []
+    for i in range(363, -1, -1):
+        d = (datetime.now().date() - timedelta(days=i)).isoformat()
+        activity.append({'date': d, **daily.get(d, zero_usage())})
+    return {'tokens': token_total, 'sessions': selected, 'models': sorted(mrows, key=lambda r: -r['usage']['total']),
+            'days': [{'date': d, **u} for d, u in sorted(daily.items())], 'activity': activity,
+            'files': [{'path': f, 'estimated_tokens': round(v, 1)} for f, v in sorted(filetotals.items(), key=lambda i: -i[1])[:25]],
+            'methodology': 'Loaded native sessions only. Router excluded to avoid double counting. Files use equal allocation, not measured per-file cost. Outcomes/durations are owner-reported assessments, not independently verified. No model quality ranking is inferred from token volume.',
+            'cost_note': 'Missing rates/costs remain unknown. Configured USD-per-million rates are estimates, not invoices. Period costs are estimates only.',
+            'days_filter': days, 'task_group': task_group, 'project': project, 'usage_events_dropped': dropped}
+
+
 class Engine:
     """Collects local sources into an immutable, publishable snapshot.
 
     Lock lifecycle
     --------------
     ``lock`` (RLock) protects the mutable ``sessions`` / ``snapshot`` / ``cfg``
-    state and the caches. ``poll_lock`` serialises collector cycles. Network,
-    database and git I/O always happens *outside* ``lock``; handlers only take
-    ``lock`` to read a reference or swap the published snapshot, never to run
-    expensive work. ``view()`` / ``detail()`` copy the published state outside
-    the lock so request handlers never block the collector.
+    state, the published ``_facts`` and the caches. ``poll_lock`` serialises
+    collector cycles. Network, database and git I/O always happens *outside*
+    ``lock``; handlers only take ``lock`` to read a reference or swap the
+    published snapshot, never to run expensive work. ``view()`` / ``detail()``
+    copy the published state outside the lock so request handlers never block
+    the collector. ``_facts`` is built outside the lock and only assigned under
+    it, so a reader always sees one coherent revision.
     """
+
+    MAX_PREVIOUS_STATES = 5000
+    GIT_CACHE_TTL = 3600
+    ANALYTICS_CACHE_MAX = 16
 
     def __init__(self, directory, overrides=None, repair_secrets=False):
         self.store = Store(directory)
-        self.control_token = self.store.secret('owner.token', repair=repair_secrets)
-        self.mcp_token = self.store.secret('mcp.token', repair=repair_secrets)
-        self.pairing_key = self.store.secret('pairing.key', repair=repair_secrets)
-        self.config_path = self.store.directory / 'config.json'
-        if self.config_path.exists():
-            raw = json.loads(self.config_path.read_text('utf-8'))
-        else:
-            raw = default_config()
-        raw.update(overrides or {})
-        self.cfg = validate_config(raw)
-        self.lock = threading.RLock()
-        self.poll_lock = threading.Lock()
-        self.stop = threading.Event(); self.wake = threading.Event()
-        self.db_cache = {}; self.codex_cache = {}; self.router_cache = {}
-        self.git_cache = {}; self.scan_result = {'running': False, 'items': []}
-        self.sessions = {}; self.previous_states = {}
-        self.snapshot = {'version': VERSION, 'generated_at': 0, 'refreshing': True, 'sessions': [], 'projects': [], 'sources': [], 'alerts': [], 'definitions': [], 'router': [], 'coverage': []}
-        self.started = now_ms(); self.port = 8765; self.thread = None
-        self.server = None
         self._closed = False
-        self._facts = []
-        self._facts_revision = 0
-        self.save_config(self.cfg)
+        self._close_lock = threading.Lock()
+        try:
+            self.control_token = self.store.secret('owner.token', repair=repair_secrets)
+            self.mcp_token = self.store.secret('mcp.token', repair=repair_secrets)
+            self.pairing_key = self.store.secret('pairing.key', repair=repair_secrets)
+            self.config_path = self.store.directory / 'config.json'
+            if self.config_path.exists():
+                raw = json.loads(self.config_path.read_text('utf-8'))
+            else:
+                raw = default_config()
+            raw.update(overrides or {})
+            self.cfg = validate_config(raw)
+            self.lock = threading.RLock()
+            self.poll_lock = threading.Lock()
+            self.stop = threading.Event(); self.wake = threading.Event()
+            self.db_cache = {}; self.codex_cache = {}; self.router_cache = {}
+            self.git_cache = {}; self.scan_result = {'running': False, 'items': []}
+            self.sessions = {}; self.previous_states = {}
+            self.snapshot = {'version': VERSION, 'generated_at': 0, 'refreshing': True, 'sessions': [], 'projects': [], 'sources': [], 'alerts': [], 'definitions': [], 'router': [], 'coverage': []}
+            self.started = now_ms(); self.port = 8765; self.thread = None
+            self._scan_thread = None
+            self.server = None
+            self._facts = []
+            self._facts_revision = 0
+            self._analytics_cache = OrderedDict()
+            self.save_config(self.cfg)
+        except BaseException:
+            # Never leak the observer DB when construction fails part-way.
+            self.store.close()
+            self._closed = True
+            raise
 
     def __enter__(self):
         return self
@@ -155,7 +308,6 @@ class Engine:
     def __exit__(self, exc_type, exc, tb):
         self.close()
         return False
-
 
     def config(self):
         with self.lock:
@@ -395,14 +547,46 @@ class Engine:
         for a in alerts:
             a['acknowledged'] = a['id'] in ack
         rows.sort(key=lambda s: (s['state'] not in ACTIVE, -s['updated']))
+        retained = {s['id'] for s in rows}
+        self._prune_state_tracking(retained, cfg)
+        facts = build_facts(rows)
         with self.lock:
             self.sessions = {s['id']: s for s in rows}
+            self._facts = facts
+            self._facts_revision += 1
+            self._analytics_cache.clear()
             self.snapshot = {'version': VERSION, 'generated_at': now_ms(), 'refreshing': False,
                              'sessions': [self.summary(s) for s in rows], 'projects': prows,
                              'sources': sources, 'alerts': alerts, 'definitions': definitions,
                              'router': router, 'coverage': [s for s in sources if s.get('truncated') or s.get('catching_up')],
                              'privacy': {'show_prompts': cfg['show_prompts'], 'reporting': cfg['enable_reporting'], 'abort': cfg['allow_abort']}}
         self.store.prune(cfg['history_days'])
+
+    def _prune_state_tracking(self, retained, cfg):
+        """Bound state-change memory and per-source caches to what is retained.
+
+        ``previous_states`` only exists to detect transitions of currently
+        visible sessions, so anything outside the retained window is dropped.
+        A hard cap protects against a pathological window size.
+        """
+        previous = self.previous_states
+        for sid in list(previous):
+            if sid not in retained:
+                del previous[sid]
+        if len(previous) > self.MAX_PREVIOUS_STATES:
+            for sid in list(previous)[:len(previous) - self.MAX_PREVIOUS_STATES]:
+                del previous[sid]
+        db_paths = set(cfg['db_paths'])
+        for path in list(self.db_cache):
+            if path not in db_paths:
+                del self.db_cache[path]
+        router_paths = set(cfg['router_events'])
+        for path in list(self.router_cache):
+            if path not in router_paths:
+                del self.router_cache[path]
+        for path in list(self.git_cache):
+            if time.time() - self.git_cache[path][0] > self.GIT_CACHE_TTL:
+                del self.git_cache[path]
 
     @staticmethod
     def summary(s):
@@ -468,76 +652,20 @@ class Engine:
             # Inclusive local calendar window, not a rolling N*24h plus today.
             start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
             cutoff = int(start.timestamp() * 1000)
+        key = (days, path_key(project) if project else '', task_group, source)
         with self.lock:
-            sessions = copy.deepcopy(list(self.sessions.values()))
-        models = {}; daily = defaultdict(zero_usage); filetotals = defaultdict(float); selected = []; token_total = 0
-        def modelrow(model, provider):
-            key = provider + '/' + model
-            return models.setdefault(key, {'id': key, 'model': model, 'provider': provider, 'usage': zero_usage(), 'sessions': set(), 'requests': 0, 'recorded_cost': None,
-                                            'estimated_cost': None, 'priced_tokens': 0, 'assessments': [], 'errors': 0, 'retries': 0})
-        for s in sessions:
-            if s['source'] == 'reported' or (source and source != s['source']) or (project and path_key(s['directory']) != path_key(project)):
-                continue
-            assessment = s.get('assessment') or {}
-            group = assessment.get('task_group') or s.get('task_group', '')
-            if task_group and group != task_group:
-                continue
-            if cutoff and s['updated'] < cutoff:
-                continue
-            selected.append(s)
-            relevant = [e for e in s['usage_events'] if not cutoff or e['ts'] >= cutoff]
-            for e in relevant:
-                if day(e['ts']):
-                    add_usage(daily[day(e['ts'])], e)
-            session_tokens = sum(e['total'] for e in relevant) if cutoff else s['usage']['total']
-            token_total += session_tokens
-            if s['files']:
-                for f in s['files']:
-                    filetotals[f] += session_tokens / len(s['files'])
-            if cutoff:
-                bymodel = {}
-                for e in relevant:
-                    key = e['provider'] + '/' + e['model']
-                    row = bymodel.setdefault(key, {'model': e['model'], 'provider': e['provider'], 'usage': zero_usage(), 'cost': None, 'requests': 0})
-                    add_usage(row['usage'], e); row['requests'] += 1
-            else:
-                bymodel = s['model_usage']
-            for entry in bymodel.values():
-                r = modelrow(entry['model'], entry['provider']); add_usage(r['usage'], entry['usage']); r['sessions'].add(s['id']); r['requests'] += entry['requests']
-                if entry.get('cost') is not None:
-                    r['recorded_cost'] = (r['recorded_cost'] or 0) + entry['cost']
-                pricing = cfg['pricing'].get(r['id']) or cfg['pricing'].get(r['model'])
-                if pricing:
-                    u = entry['usage']; components = {'input': u['input'], 'output': u['output'] + u['reasoning'], 'cache_read': u['cache_read'], 'cache_write': u['cache_write']}
-                    if all(v == 0 or k in pricing for k, v in components.items()):
-                        estimate = sum(v * pricing.get(k, 0) / 1e6 for k, v in components.items())
-                        r['estimated_cost'] = (r['estimated_cost'] or 0) + estimate; r['priced_tokens'] += u['total']
-                # Error and retry counts are session-level, not fabricated per-model splits.
-                if len(s['model_usage']) == 1:
-                    r['errors'] += s['errors']; r['retries'] += s['retry_count']
-            if assessment:
-                r = modelrow(assessment.get('model') or s['model'], assessment.get('provider') or s['provider'])
-                r['assessments'].append(assessment)
-        mrows = []
-        for r in models.values():
-            r['sessions'] = len(r['sessions'])
-            assessed = r.pop('assessments'); verified_tests = [a for a in assessed if isinstance(a.get('tests_passed'), bool)]
-            fixes = [a['review_fixes'] for a in assessed if isinstance(a.get('review_fixes'), int)]
-            elapsed = [a['duration_seconds'] for a in assessed if isinstance(a.get('duration_seconds'), (int, float))]
-            r.update(assessed_tasks=len(assessed), test_samples=len(verified_tests), test_pass_rate=sum(a['tests_passed'] for a in verified_tests) / len(verified_tests) if verified_tests else None,
-                     avg_review_fixes=sum(fixes)/len(fixes) if fixes else None, avg_duration_seconds=sum(elapsed)/len(elapsed) if elapsed else None,
-                     tokens_per_session=r['usage']['total']/r['sessions'] if r['sessions'] else None)
-            mrows.append(r)
-        activity = []
-        for i in range(363, -1, -1):
-            d = (datetime.now().date() - timedelta(days=i)).isoformat()
-            activity.append({'date': d, **daily.get(d, zero_usage())})
-        return {'tokens': token_total, 'sessions': len(selected), 'models': sorted(mrows, key=lambda r: -r['usage']['total']),
-                'days': [{'date': d, **u} for d, u in sorted(daily.items())], 'activity': activity,
-                'files': [{'path': f, 'estimated_tokens': round(v, 1)} for f, v in sorted(filetotals.items(), key=lambda i: -i[1])[:25]],
-                'methodology': 'Loaded native sessions only. Router excluded to avoid double counting. Files use equal allocation, not measured per-file cost. Outcomes/durations are owner-reported assessments, not independently verified. No model quality ranking is inferred from token volume.',
-                'cost_note': 'Missing rates/costs remain unknown. Configured USD-per-million rates are estimates, not invoices. Period costs are estimates only.',
-                'days_filter': days, 'task_group': task_group, 'project': project}
+            revision = self._facts_revision
+            facts = self._facts
+            cached = self._analytics_cache.get((revision,) + key)
+        if cached is None:
+            # Aggregation runs outside the lock over one immutable revision.
+            cached = compute_analytics(facts, cutoff, cfg, days, project, task_group, source)
+            with self.lock:
+                if self._facts_revision == revision:
+                    self._analytics_cache[(revision,) + key] = cached
+                    while len(self._analytics_cache) > self.ANALYTICS_CACHE_MAX:
+                        self._analytics_cache.popitem(last=False)
+        return copy.deepcopy(cached)
 
     def add_report(self, raw):
         if not self.config()['enable_reporting']:
@@ -571,6 +699,12 @@ class Engine:
         with self.lock:
             if sid in self.sessions:
                 self.sessions[sid]['assessment'] = a
+                for i, fact in enumerate(self._facts):
+                    if fact['id'] == sid:
+                        self._facts[i] = build_fact(self.sessions[sid])
+                        break
+                self._facts_revision += 1
+                self._analytics_cache.clear()
         self.wake.set()
         return a
 
@@ -590,7 +724,8 @@ class Engine:
                 result = {'items': [], 'errors': [redact(e)], 'truncated': True}
             with self.lock:
                 self.scan_result = {**result, 'running': False, 'finished': now_ms()}
-        threading.Thread(target=work, daemon=True, name='bounded-discovery').start()
+        self._scan_thread = threading.Thread(target=work, daemon=True, name='bounded-discovery')
+        self._scan_thread.start()
         return {'running': True}
 
     def adopt_scan(self, selected):
@@ -627,27 +762,36 @@ class Engine:
         self.wake.set()
         return {'requested': True, 'response': response}
 
-    def close(self):
-        """Deterministically stop the collector, drain HTTP work, then close the DB."""
-        if getattr(self, '_closed', False):
-            return
-        self._closed = True
-        self.stop.set(); self.wake.set()
-        if self.thread:
-            self.thread.join(timeout=5)
-        server = getattr(self, 'server', None)
-        if server is not None:
-            try:
-                server.shutdown()
-            except Exception:
-                pass
-            try:
-                server.wait_idle(5)
-            except Exception:
-                pass
-            try:
-                server.server_close()
-            except Exception:
-                pass
-        # Always release the observer DB once no handler or collector can use it.
-        self.store.close()
+    def close(self, timeout=5):
+        """Deterministically release every resource this engine owns.
+
+        Returns ``True`` only when the collector thread, the scanner thread and
+        the HTTP server have all stopped and the observer DB is closed. If a
+        worker does not stop in time, raises :class:`LifecycleError` and leaves
+        the DB open rather than yanking it out from under a live thread.
+        Simultaneous callers serialise on ``_close_lock``; the first performs
+        the shutdown and the rest return the same success.
+        """
+        with self._close_lock:
+            if self._closed:
+                return True
+            self.stop.set(); self.wake.set()
+            if not self._join_worker(self.thread, timeout):
+                raise LifecycleError(f'collector thread did not stop within {timeout}s; observer DB left open')
+            if not self._join_worker(getattr(self, '_scan_thread', None), timeout):
+                raise LifecycleError(f'scanner thread did not stop within {timeout}s; observer DB left open')
+            server = getattr(self, 'server', None)
+            if server is not None:
+                server.request_stop(timeout)
+            self.store.close()
+            self._closed = True
+            return True
+
+    @staticmethod
+    def _join_worker(thread, timeout):
+        if thread is None:
+            return True
+        if thread is threading.current_thread():
+            return True
+        thread.join(timeout)
+        return not thread.is_alive()
