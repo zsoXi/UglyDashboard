@@ -1,4 +1,4 @@
-# V6 — Handoff (stan na 2026-09-17, przed resetem PC)
+# V6 — Handoff (stan na 2026-09-17, po C.1/D.1/D.2, przed etapem E)
 
 Dokument przekazania roboczego stanu V6. Publiczny: brak sekretów, brak prywatnych promptów,
 brak danych użytkownika. Ścieżki użytkownika podano jako `%USERPROFILE%` — nie kopiuj ich do repo.
@@ -8,7 +8,7 @@ brak danych użytkownika. Ścieżki użytkownika podano jako `%USERPROFILE%` —
 | Rola | Ścieżka | Gałąź | Uwaga |
 | --- | --- | --- | --- |
 | v5 (produkcja, działająca) | `D:\TESTY!\Dashboard\V2\OpenCode_Mission_Control_v4` | `fix/mission-control-v5-hardening-ui` @ `5685080` | instancja na porcie 8765 (PID może się zmienić) |
-| V6 (praca) | `D:\TESTY!\Dashboard\V6\UglyDashboard` (git worktree) | `feat/mission-control-v6` @ `ac4d70f` | port testowy 8780, osobny katalog stanu |
+| V6 (praca) | `D:\TESTY!\Dashboard\V6\UglyDashboard` (git worktree) | `feat/mission-control-v6` @ `fd0088a` | port testowy 8780, osobny katalog stanu |
 | Dashboard porównawczy | `D:\TESTY!\Dashboard\opencode_dashboard.py` | — | port 8770; NIE modyfikować |
 | Raport odniesienia | `D:\TESTY!\V3\little-better-dashboard` | — | nie był źródłem procesu na 8770 |
 
@@ -16,101 +16,88 @@ Repo: `https://github.com/zsoXi/UglyDashboard`
 - PR v5: #1 (`fix/mission-control-v5-hardening-ui` → `main`), nadal otwarty, nie scalony.
 - PR V6: #2 (draft) — baza `fix/mission-control-v5-hardening-ui`, head `feat/mission-control-v6`.
 
-## 2. Stan wykonania (Etap A / B / C / D / E)
+## 2. Stan wykonania
 
 | Etap | Status | Dowód |
 | --- | --- | --- |
-| A — izolacja i baseline | IMPLEMENTED AND VERIFIED | worktree od `5685080`; baseline w V6: 144 testy / 0 błędów / 2 pominięcia / 0 `ResourceWarning`; `npm ci` 87 pakietów / 0 podatności; `npm run check` zielone; Playwright 27/27 |
-| B — sekrety + uzgodnienie zużycia | IMPLEMENTED AND VERIFIED | `Store.rotate_secret`, CLI `--rotate-owner-token`, `scripts/check_secrets.py`, `tests/test_v6_secrets.py`; uzgodnienie OpenCode: błąd 174 609 418 tokenów usunięty; `docs/V6_RECONCILIATION.md` |
-| C — przyrostowe pełne pokrycie | NOT COMPLETED (następny krok) | — |
-| D — English/Polski + raport zużycia | NOT COMPLETED | — |
-| E — MCP, produkcyjny build, migracja, benchmarki, odbiór | NOT COMPLETED | — |
+| A — izolacja i baseline | IMPLEMENTED AND VERIFIED | worktree od `5685080`; 144 testy baseline; `npm ci` 87 pakietów / 0 podatności |
+| B — sekrety + uzgodnienie zużycia | IMPLEMENTED AND VERIFIED | `Store.rotate_secret`, CLI `--rotate-owner-token`, `scripts/check_secrets.py`; `docs/V6_RECONCILIATION.md` |
+| C — przyrostowe pełne pokrycie (OpenCode + Codex) | IMPLEMENTED AND VERIFIED | commity `b4941dd`, `b105ecf`; 100k → 12 347 213 = wzorzec / 9,5 s; 1M → 126 001 216 = wzorzec / 103,6 s / 6 cykli; restart bez utraty i podwójnego liczenia |
+| C.1 — precyzyjny kontrakt kompletności | IMPLEMENTED AND VERIFIED | commit `c7e8bca`; `tests/test_v6_coverage.py`; eksport CSV + MCP na tym samym bloku |
+| D.1 — pełne English / Polski | IMPLEMENTED AND VERIFIED | commit `8459551`; 454 klucze EN = 454 PL; `scripts/check_i18n.mjs`; Playwright 32/32 |
+| D.2 — raport zużycia | IMPLEMENTED AND VERIFIED | commit `fd0088a`; `tests/browser/usage.spec.mjs`; Playwright 38/38 |
+| E — MCP, produkcyjny dist, migracja, benchmarki, odbiór | NOT COMPLETED (następny krok) | plan w `docs/V6_STATUS.md` |
 
-CI dla `ac4d70f`: obie runs zielone (pull_request `35171630327`, push `35171621991`), 6/6 zadań,
-w tym nowy krok „Secret leak guard” w zadaniu verify.
+Stan bieżący (zweryfikowany przed handoffem):
 
-Aktualne liczby testów w V6: **149 testów Python** (0 błędów, 2 pominięcia środowiskowe:
-symlinki, uprawnienia POSIX), **27/27 Playwright**, ruff czysty, build odtwarzalny.
+- HEAD `fd0088a` wypchnięty na `origin/feat/mission-control-v6`, drzewo czyste.
+- `scripts/run_tests.py` → 165 testów, 0 błędów, 2 pominięcia środowiskowe, 0 `ResourceWarning`.
+- `npm run check` zielony (lint, strict typecheck, prettier, `check:i18n` 454 = 454, build odtwarzalny).
+- `npx playwright test` → 38/38 (desktop + mobile).
+- `scripts/check_secrets.py` → czysto.
 
 ## 3. Jak wznowić po resecie (kolejność)
 
 ```powershell
 # 1. Worktree (jeśli istnieje — nic nie rób; jeśli zniknie, odtwórz z v5-repo):
 git -C "D:\TESTY!\Dashboard\V2\OpenCode_Mission_Control_v4" worktree list
-git -C "D:\TESTY!\Dashboard\V2\OpenCode_Mission_Control_v4" worktree add -b feat/mission-control-v6 "D:\TESTY!\Dashboard\V6\UglyDashboard" ac4d70f
+git -C "D:\TESTY!\Dashboard\V2\OpenCode_Mission_Control_v4" worktree add -b feat/mission-control-v6 "D:\TESTY!\Dashboard\V6\UglyDashboard" fd0088a
 
 # 2. Zależności frontendu w V6:
 npm --prefix "D:\TESTY!\Dashboard\V6\UglyDashboard" ci
 
-# 3. Testy Python (v5-venv 3.14; jeśli brak, utwórz nowe venv i tylko testuj — runtime jest stdlib):
-& "D:\TESTY!\Dashboard\V2\OpenCode_Mission_Control_v4\.venv\Scripts\python.exe" -X utf8 `
-  -c "import os; os.chdir(r'D:\TESTY!\Dashboard\V6\UglyDashboard')"
-# zalecane: uruchamiaj skryptem (nie inline), z katalogu V6:
-#   scripts\run_tests.py , scripts\check_secrets.py , scripts\reconcile_usage.py
+# 3. Testy Python (v5-venv 3.14 albo dowolne Python 3.10+; runtime jest stdlib):
+# zalecane: uruchamiaj skryptami z katalogu V6:
+#   python -X utf8 scripts/run_tests.py
+#   python -X utf8 scripts/check_secrets.py
 
-# 4. Przeglądarka (produkcyjny build wg Etapu E):
-npm run check ; npx playwright test
+# 4. Front + przeglądarka:
+npm run check
+npx playwright test
 ```
 
 Uruchamianie instancji V6 do testów manualnych: **port 8780 + osobny katalog stanu**, np.
-`opencode_dashboard.py --port 8780 --state-dir <katalog tymczasowy> --no-open`. Nie dotykać 8765
-(produkcyjna v5) ani 8770 (dashboard porównawczy). Nie kończyć cudzych procesów.
+`python -X utf8 opencode_dashboard.py --port 8780 --state-dir <katalog tymczasowy> --no-open`.
+Nie dotykać 8765 (produkcyjna v5) ani 8770 (dashboard porównawczy). Nie kończyć cudzych procesów.
 
-## 4. Co dokładnie pozostało
+## 4. Następny krok — E.1 (produkcyjny `dist`)
 
-### Etap C — przyrostowe pełne pokrycie (priorytet)
-1. Rozdzielić warstwy: agregaty (pełne), szczegóły (ograniczane), checkpointy (własne, w `observer.sqlite`).
-2. OpenCode: dokończyć niezależność agregatów od limitów szczegółów — zrobione dla części
-   (`MAX_OC_PARTS_PER_SESSION` nie obcina już sum); dodać checkpointy per sesja i kontynuację po budżecie.
-3. Codex: discovery pełnego zbioru przyrostowo (`~/.codex` + `~/.codex/browser`, dedup po tożsamości
-   sesji i treści pliku); limit `codex_file_limit` nie może powodować, że pliki znikają na zawsze.
-4. UI/API: pola kompletności (`usage_aggregates_complete`, `detail_history_truncated`,
-   `catching_up`, `aggregate_truncated_sessions`, `discovered/processed`), wspólne dla UI, eksportu i MCP.
-5. Testy: regresje z macierzy w specyfikacji V6 (restart z checkpointu, powtórny odczyt bez wzrostu sum,
-   rotacja/przepisanie pliku, reset licznika, forki, zmiana modelu w sesji).
+1. `scripts/build.mjs`: kopiowanie `web/index.html` → `web/dist/index.html`; manifest ma
+   objąć wejścia `i18n/en.js`, `i18n/pl.js`, `i18n/core.js` oraz wyjścia
+   `index.html`, `app.js`, `style.css`.
+2. `mission_control/server.py`: domyślnie serwuj `web/dist/*` z weryfikacją sha256 wobec
+   `web/dist/manifest.json`; przy braku lub niezgodności — czytelna strona komunikatu
+   (i 503 dla `app.js`/`style.css`), **bez cichego fallbacku na `web/`**; `/i18n/*`
+   tylko w trybie `dev_web`; parametr `Server(..., dev_web=False)`.
+3. `mission_control/cli.py`: flaga `--dev-web`; domyślnie produkcja.
+4. `tests/browser/global-setup.mjs`: przed startem fixture uruchom `npm run build`.
+5. Nowe `tests/test_v6_dist.py`: zgodność serwowanych bajtów z manifestem; brak fallbacku;
+   `dev_web` + `/i18n` 200/404; brak dostępu do konfiguracji/logów/sekretów; praca z innego CWD.
+6. Odbiór: `npm run check`, `scripts/run_tests.py`, pełny Playwright na `dist`.
 
-### Etap D — English / Polski + raport zużycia
-- Pełne i18n (klucze stabilne, walidacja zgodności EN/PL, placeholdery, `Intl`), przełącznik w UI,
-  domyślnie English, zachowanie preferencji; `lang` w `<html>`; testy Playwright w obu językach.
-- Widok „Zużycie”: Today / 7 / 30 / całość / zakres, OpenCode / Codex / Combined z jasnym zakresem,
-  input/output/reasoning/cache read/write, koszt źródłowy vs szacowany vs ręczny, heatmapa, eksport.
-
-### Etap E — MCP, build, migracja, odbiór
-- MCP: te same uzgodnione dane z kompletnością i pochodzeniem; paginacja; brak uprawnień do
-  konfiguracji/sekretów/abort/shutdown z odczytowego MCP; testy stdio i ścieżek Windows.
-- Produkcyjny frontend: serwer domyślnie serwuje `dist/` z manifestem; tryb developerski jawnie źródła;
-  Playwright na artefakcie produkcyjnym; hash serwowanego JS/CSS zgodny z manifestem.
-- Migracja v5→V6 `observer.sqlite`: transakcyjna, idempotentna, zachowuje ustawienia/oceny;
-  oznacza stare agregaty jako wymagające kontrolowanego przeliczenia.
-- Benchmarki: 100k i 1M zdarzeń z generatorem znającym oczekiwane sumy; pełne pokrycie
-  1000/1000 sesji przyrostowo; warm analytics; latencja overview podczas importu; restart.
-- CI: dodać kroki i18n oraz Playwright na dist; zadbać o ostrzeżenia Node 20 w akcjach.
-- PR #2 doprowadzić do stanu gotowego (bez auto-merge); dokumentacja: README/README_PL/CHANGELOG/
-  SECURITY/TEST_REPORT + zrzuty EN/PL (syntetyczne dane).
+Potem E.2 (migracja `observer.sqlite`), E.3 (MCP + bezpieczeństwo), E.4 (odbiór końcowy,
+benchmarki 100k/1M, dokumentacja + zrzuty EN/PL, wersja 6.0.0, CI, PR #2). Szczegóły:
+`docs/V6_STATUS.md`, sekcje E.1–E.4.
 
 ## 5. Dowody i artefakty
 
-- `docs/V6_STATUS.md` — status etapów i dowody.
+- `docs/V6_STATUS.md` — status etapów i co pozostało.
 - `docs/V6_RECONCILIATION.md` — uzgodnienie OpenCode/Codex z liczbami i wnioskami.
-- `scripts/check_secrets.py` — guard wycieków (skan repo + `artifacts/`, `test-results/`,
-  `playwright-report/`; wypisuje tylko ścieżkę/linię/etykietę/długość; exit 1 przy trafieniach).
-- `scripts/reconcile_usage.py`, `scripts/reconcile_codex.py` — reprodukcja uzgodnienia
-  (kopia SQLite przez backup API z WAL; sesje hashowane; brak tytułów/promptów/ścieżek).
-- `tests/test_v6_secrets.py` — testy rotacji i guarda.
-- Tymczasowe JSON-y uzgodnienia w `%USERPROFILE%\AppData\Local\Temp\opencode\` — nie są w repo,
-  można je wygenerować ponownie skryptami.
+- `scripts/check_i18n.mjs` — kontrole słowników i tekstów UI.
+- `scripts/check_secrets.py` — guard wycieków (ścieżka/linia/etykieta/długość; exit 1 przy trafieniu).
+- `tests/test_v6_coverage.py` — macierz kompletności (C.1).
+- `tests/browser/i18n.spec.mjs`, `tests/browser/usage.spec.mjs` — odbiór UI w obu językach i raport zużycia.
 
 ## 6. Rzeczy otwarte / wymagające decyzji użytkownika
 
-- **Rotacja produkcyjnego tokenu właściciela v5 NIE została wykonana** (świadomie — wymaga zgody
-  na wdrożenie). Procedura: zatrzymać instancję, `python -X utf8 opencode_dashboard.py
-  --rotate-owner-token --state-dir <stan>`, uruchomić ponownie z `--open`. Zachowuje bazę,
-  konfigurację, `mcp.token` i `pairing.key`.
+- **Rotacja produkcyjnego tokenu właściciela v5 NIE została wykonana** (świadomie — wymaga zgody).
+  Procedura: zatrzymać instancję, `python -X utf8 opencode_dashboard.py --rotate-owner-token
+  --state-dir <stan>`, uruchomić ponownie z `--open`. Zachowuje bazę, konfigurację,
+  `mcp.token` i `pairing.key`.
 - **Rzeczywiste połączenie klientów MCP (ChatGPT/Codex) NIE zostało zweryfikowane** — są tylko
-  testy lokalne protokołu; potrzebne jest sprawdzenie na realnym kliencie.
-- Historyczne tokeny, które pojawiły się w logach terminala podczas wcześniejszych prac, są już
-  nieaktywne (sesje zakończone), ale rotacja produkcyjna i tak pozostaje zalecana przy okazji
-  najbliższego restartu v5.
+  lokalne testy protokołu; potrzebny jest test na realnym kliencie (checklist w E.3).
+- Historyczne tokeny z logów terminala są nieaktywne (sesje zakończone), ale rotacja
+  produkcyjna pozostaje zalecana przy najbliższym restarcie v5.
 
 ## 7. Stan instancji po resecie
 

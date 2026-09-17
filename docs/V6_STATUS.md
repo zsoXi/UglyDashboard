@@ -3,154 +3,144 @@
 Dokument roboczy odbioru V6. Bez sekretów, bez prywatnych promptów i bez
 lokalnych danych użytkownika. Aktualizowany po każdym etapie.
 
-- Wersja docelowa: **6.0.0**
-- Gałąź: `feat/mission-control-v6`
+- Wersja docelowa: **6.0.0** (obecnie kod nadal raportuje 5.0.0 — ujednolicenie w E.4)
+- Gałąź: `feat/mission-control-v6` — HEAD `fd0088a`, wypchnięty, drzewo czyste
 - Baza: `fix/mission-control-v5-hardening-ui` @ `5685080` (PR #1 wciąż otwarty)
 - Worktree: `V6/UglyDashboard` (izolowany od działającej v5 na porcie 8765)
 - Port testowy V6: 8780, osobny katalog stanu
 
-## Etap A — stan bazowy i izolacja
+## Etapy A–C (wcześniejsze, bez zmian)
 
-Stan: `IMPLEMENTED AND VERIFIED`.
+Stan: `IMPLEMENTED AND VERIFIED` (szczegóły w historii commitów
+`ac4d70f`, `b4941dd`, `b105ecf`, `5fe314a`).
 
-- Worktree V6 utworzony z commita `5685080`; `git worktree list` pokazuje
-  v5 i V6 jako osobne katalogi robocze.
-- Jedna rejestracja worktree dla v5 i jedna dla V6; brak zmian w v5.
-- Baseline zmierzony wewnątrz V6 (nie przepisany z raportów v5):
-  - `scripts/run_tests.py` → 144 testy, 0 błędów, 2 pominięcia
-    środowiskowe, 0 `ResourceWarning`, 33,2 s (Python 3.14.3, Windows).
-  - `npm ci` → 87 pakietów, 0 podatności.
-  - `npm run check` → lint, strict typecheck, format, build (reproducible).
-  - `npx playwright test` → 27/27 (desktop + mobile).
-- Instancje 8765 i 8770 nie były zatrzymywane ani modyfikowane.
+- A: worktree + baseline w V6; `npm ci` 87 pakietów / 0 podatności.
+- B: `Store.rotate_secret`, CLI `--rotate-owner-token`, `scripts/check_secrets.py`,
+  `tests/test_v6_secrets.py`; uzgodnienie OpenCode — usunięty błąd
+  174 609 418 tokenów (`docs/V6_RECONCILIATION.md`).
+- C: przyrostowe pełne pokrycie OpenCode (checkpointy `usage_checkpoint`,
+  `incremental.py`, budżet 5 s/cykl) i Codex (`discover_all_codex_files`,
+  kursor rotacji, cache plików). Dowody: 100 tys. zdarzeń → 1000/1000 sesji,
+  12 347 213 = wzorzec, 9,5 s, 1 cykl; 1 mln → 1000/1000, 126 001 216 = wzorzec,
+  103,6 s, 6 cykli; restart w połowie i po imporcie bez utraty/podwójnego
+  liczenia; Codex 12/12 plików + 1860 tokenów z limitem partii 10.
 
-## Etap B — sekrety i uzgodnienie liczników
+## Etap C.1 — precyzyjny kontrakt kompletności — IMPLEMENTED AND VERIFIED
 
-Stan: `IMPLEMENTED AND VERIFIED` (sekrety oraz uzgodnienie liczb
-OpenCode; zakres Codexa udokumentowany jako różnica zbiorów danych).
+Commit `c7e8bca` (3 pliki, +670/-11). Nowy, wspólny blok kompletności
+(`engine.py: assemble_coverage/range_coverage/session_flags`):
 
-Wykonane:
+- `metadata_complete`, `aggregates_complete`, `history_limited`,
+  `breakdowns {daily,model,file}`, `breakdown_details`,
+  `details_truncated`, `detail_events_evicted`, `catching_up`,
+  `source_stale`, `read_blocked`, `discovered_sessions`,
+  `processed_sessions`, `last_successful_read_at`.
+- `_mark_read`/`_apply_coverage` w `Engine`; trwały
+  `source_read_health` w `observer.sqlite`.
+- Analiza zakresu: `compute_analytics(..., basis)` dokłada
+  `coverage` o zakresie wybranych filtrów; eksport CSV przenosi ten sam
+  blok w nagłówku `X-Mission-Control-Coverage`; MCP
+  (`mission_overview`, `model_comparison`, `list_agents`) korzysta z
+  tego samego obiektu.
+- Zasady: pełna suma ≠ pełny podział; brak znanego mianownika = `null`,
+  nie zero; nieświeży odczyt = ostatni dobry wynik + `source_stale`;
+  zablokowany odczyt = `read_blocked`.
+- Testy: `tests/test_v6_coverage.py` (8 przypadków, w tym 4001-częściowa
+  sesja → sumy pełne, szczegóły ograniczone, 1 zdarzenie wyparte; restart
+  budżetu; brak mianownika; spójność UI/eksport/MCP).
+- Weryfikacja: 165 testów Python 0 błędów / 2 pominięcia; ruff czysty;
+  `npm run check` zielony.
 
-- `Store.rotate_secret(name)` — atomowa rotacja pojedynczego poświadczenia
-  (`os.replace` nowego pliku tymczasowego; brak kopii starej wartości).
-  Zachowuje `observer.sqlite`, `config.json`, `mcp.token` i `pairing.key`.
-- CLI `--rotate-owner-token` — rotuje wyłącznie `owner.token` w katalogu
-  stanu, nie uruchamia serwera i nie wypisuje wartości tokenu. Rotacja
-  unieważnia stary token po restarcie działającej instancji.
-- `scripts/check_secrets.py` — strażnik wycieków: skanuje pliki repo oraz
-  lokalne katalogi dowodowe (`artifacts/`, `test-results/`,
-  `playwright-report/`), nie wypisuje wartości (tylko ścieżkę, linię,
-  etykietę i długość), kończy się kodem 1 przy trafieniu. Wyklucza
-  świadome pliki poświadczeń (`.fixture-info.json`, `owner.token`,
-  `mcp.token`, `pairing.key`) i odrzuca fałszywe trafienia (ciągi jednego
-  znaku, wartości bez liter i cyfr).
-- `tests/test_v6_secrets.py` — testy rotacji (tylko `owner.token` się
-  zmienia; brak pliku `.bak`; walidacja nazwy) i strażnika (wykrycie
-  wzorca, brak wycieku wartości, czysty katalog = 0).
+## Etap D.1 — pełne English / Polski — IMPLEMENTED AND VERIFIED
 
-Dowody (V6 worktree, Python 3.14.3, Windows):
+Commit `8459551` (22 pliki, +2464/-485), wypchnięty.
 
-- `python -m ruff check .` → `All checks passed!`
-- `python -X utf8 scripts/check_secrets.py` →
-  `OK: no secret patterns in 71 scanned file(s).`
-- `python -X utf8 scripts/run_tests.py` → 149 testów, 0 błędów,
-  2 pominięcia środowiskowe, 0 `ResourceWarning`, 33,5 s.
-- CI verify job zawiera krok strażnika sekretów.
+- `web/i18n/{core,en,pl}.js`: 454 klucze w każdej wersji, offline,
+  `Intl` (liczby, daty, USD, plurals), interpolacja `{name}`,
+  brakujące klucze raportowane (`window.mcMissingKeys`).
+- `web/index.html`: `lang="en"`, angielskie fallbacki, `data-i18n*`,
+  marka przez `data-i18n-skip`, skrypt jako moduł, przycisk `#lang`.
+- `web/app.js`: zero polskich literałów; domyślnie EN; przełącznik
+  zapisuje `mc-lang`, aktualizuje `html lang`, nie resetuje filtrów,
+  widoku ani otwartego inspektora; bezpieczny odczyt/zapis storage.
+- Kontrola: `scripts/check_i18n.mjs` (parytet kluczy/placeholderów/
+  kategorii liczby mnogiej, mojibake, surowe klucze, polskie literały) —
+  wpięta w `npm run check` (`check:i18n`).
+- `server.py`: allowlist `/i18n/{en,pl,core}.js` (tryb źródłowy).
+- Build: `scripts/build.mjs` z `bundle:true` (słowniki w jednym
+  `dist/app.js`).
+- Testy przeglądarkowe: `tests/browser/i18n.spec.mjs` (3) + zaktualizowane
+  specy; `npx playwright test` 32/32.
 
-Blokady i uwagi:
+## Etap D.2 — raport zużycia i spójność V6 — IMPLEMENTED AND VERIFIED
 
-- Przyczyna wcześniejszego wycieku leżała w narzędziach diagnostycznych
-  (log polecenia, tymczasowy probe i zrzuty ekranu), nie w produkcyjnej
-  ścieżce wypisywania. Ścieżka produktu nie loguje tokenu.
-- Rotacja tokenu działającej v5 (port 8765) **nie została wykonana** —
-  wymaga osobnej zgody na wdrożenie. Procedura: zatrzymać instancję,
-  `python -X utf8 opencode_dashboard.py --rotate-owner-token --state-dir <stan>`,
-  uruchomić ponownie z `--open`.
-- Uzgodnienie liczb OpenCode/Codex: `IMPLEMENTED AND VERIFIED` —
-  szczegóły w `docs/V6_RECONCILIATION.md`.
+Commit `fd0088a` (9 plików, +446/-34), wypchnięty.
 
-### Uzgodnienie zużycia (OpenCode / Codex)
+- Okresy: Today / 7 / 30 / 90 / rok / cała zarejestrowana historia
+  (te same filtry projektu i źródła dla wszystkich elementów).
+- Karty podsumowania nad raportem: tokeny (`data-total`), sesje,
+  koszt zapisany, koszt szacowany, brak znanego kosztu (liczba mnoga),
+  nota o walucie źródłowej.
+- Przełączniki prezentacji: „Zwiń reasoning do outputu” (suma bez zmian)
+  i widok udziału procentowego (składniki rozłączne, suma 100% ±1).
+- Tabela sesji w okresie (`data-tokens`, wiersze klikalne), panel
+  projektów, pliki z wierszem `Unassigned` i notą o heurystyce równego
+  podziału, heatmapa globalna z rozróżnieniem „brak rekordów” od
+  potwierdzanego zera, nota zakresu przy rejestrze routera.
+- `coverageNotice(cov, windowLimit)` używa kompletności zakresu analizy.
+- Testy: `tests/browser/usage.spec.mjs` (6) + pełny zestaw 38/38;
+  `npm run check` zielony (i18n 454 = 454).
 
-OpenCode (ta sama kopia bazy, SQLite backup API z WAL):
+## Co pozostało — Etap E (E.1–E.4)
 
-- Przyczyna różnicy to limit szczegółów `MAX_OC_PARTS_PER_SESSION = 4000`:
-  suma zużycia była liczona wyłącznie z najnowszego okna części, więc
-  starsze zdarzenia `step-finish` ginęły. Dokładnie 2 sesje z >4000 części
-  odpowiadały za całą różnicę.
-- Przed poprawką: adapter `1 357 185 076` vs pełna suma `1 531 794 494`
-  → różnica `174 609 418` (11,4%); emulacja limitu odtwarzała adapter co
-  do tokenu (różnica 0,0).
-- Po poprawce (161 sesji): adapter == suma pełna == suma z wiadomości
-  == `1 559 229 849` (różnica 0,0). Limit nadal ogranicza wyłącznie
-  historię szczegółów (`parts_loaded 63 270`, `truncated_sessions 2`).
-- Nowe pole pokrycia `aggregate_truncated_sessions`; regresja
-  `ReaderBoundsTests` zaktualizowana do kontraktu „szczegóły ograniczone,
-  sumy kompletne”.
+### E.1 — produkcyjny frontend z `dist` (następny krok)
 
-Codex:
+- `scripts/build.mjs`: kopiuj `web/index.html` → `web/dist/index.html`;
+  manifest ma objąć też wejścia `i18n/en.js`, `i18n/pl.js`, `i18n/core.js`
+  i wyjście `index.html`.
+- `server.py`: domyślnie serwuj `web/dist/*` z weryfikacją sha256 wobec
+  `web/dist/manifest.json`; brak/zgodność build → czytelny komunikat
+  (503 dla zasobów), **nigdy cichego fallbacku na `web/`**; `/i18n/*`
+  tylko w jawnym trybie `dev_web`; `Server(..., dev_web=False)`.
+- `cli.py`: flaga `--dev-web`; domyślnie produkcja.
+- `tests/browser/global-setup.mjs`: przed startem fixture uruchom
+  `npm run build` (świeży artefakt).
+- Nowe testy `tests/test_v6_dist.py`: zgodność bajtów z manifestem,
+  brak fallbacku przy braku/uszkodzeniu, `dev_web` + `/i18n` 200/404,
+  brak dostępu do konfiguracji/logów/sekretów, praca z innego CWD.
+- Odbiór: `npm run check`, `scripts/run_tests.py`, Playwright na `dist`.
 
-- Porównanie `45,4 mld` (okno 400 plików) z `9,58 mld` (syntetyzowany
-  ledger routera w panelu porównawczym) dotyczy różnych zbiorów danych i
-  nie jest porównaniem sum plików.
-- Pełny lokalny zbiór: `255 602 691 857` tokenów, 2184 pliki, 2182
-  unikalne sesje logiczne; 0 duplikatów treści; 507 resetów licznika.
-- Wniosek dla V6: discovery i przetwarzanie Codexa muszą dojść do pełnego
-  pokrycia przyrostowo, z deduplikacją po tożsamości sesji i kontrolą
-  nakładających się korzeni (`~/.codex`, `~/.codex/browser`).
+### E.2 — migracja stanu obserwatora v5→V6
 
-## Etap C — przyrostowe pełne pokrycie (OpenCode) — IMPLEMENTED AND VERIFIED
+- Wersjonowana, transakcyjna, idempotentna, odporna na przerwanie;
+  zachowuje ustawienia, oceny, źródła i sekrety (bez rotacji).
+- Uwzględnia obecny stan V6 (nie tylko pustą bazę i czyste v5).
+- Stare agregaty o niepotwierdzonej semantyce oznaczane do jawnego
+  przeliczenia. Bez ręcznego kasowania `-wal`/`-shm`; backup przez
+  SQLite backup API.
+- Testy: pusta instalacja, stan v5, obecny V6, powtórzenie, przerwanie,
+  błąd zapisu, zachowanie konfiguracji/ocen/sekretów.
 
-Wdrożone:
+### E.3 — MCP i bezpieczeństwo
 
-- trwała tabela `usage_checkpoint` w `observer.sqlite`
-  (`Store.checkpoints` / `put_checkpoints` / `delete_checkpoint`),
-- `mission_control/incremental.py`: `aggregate_session` (keyset ASC po
-  `(time_created, id)`, kursor i suma zatwierdzane razem, wykrywanie
-  dopisania i przepisania źródła) oraz `aggregate_source` (rotacja
-  `next_index`, aby jedna ogromna sesja nie blokowała pozostałych),
-- `Engine._aggregate_db_source` wywoływany w każdym `_poll` z budżetem
-  `AGGREGATE_BUDGET_SECONDS = 5,0`; sesje bez szczegółów pozostają
-  opublikowane jako metadane, a kompletność liczona jest względem
-  `metadata_sessions`, nie względem okna szczegółów.
+- MCP: te same uzgodnione dane z kompletnością i pochodzeniem; testy
+  `initialize`/`tools/list`/`tools/call`/`resources`, paginacja, brak
+  dostępu do ustawień/sekretów/abort/shutdown, czysty stdout stdio,
+  launcher z innego CWD i ścieżki Windows ze spacjami.
+- Rzeczywiste klienty (ChatGPT/Codex) — checklist odbioru; lokalnie
+  gotowe, zewnętrzna weryfikacja oznaczona jawnie.
+- Bezpieczeństwo: potwierdzenie braku wycieku tokenu w logach/skryptach
+  testów; procedura rotacji owner token (bez wykonania na produkcji).
 
-Dowody (syntetyczne zbiory; sumy oczekiwane z arytmetyki generatora, nie
-z ponownego wywołania readera):
+### E.4 — odbiór końcowy, benchmarki, dokumentacja, CI, PR
 
-| Zbiór | Sesje uwzględnione | Suma zgodna ze wzorcem | Pełne pokrycie | Cykle | Restart |
-| --- | --- | --- | --- | --- | --- |
-| 100 tys. zdarzeń | 1000/1000 | 12 347 213 = 12 347 213 | 9,5 s | 1 | identyczna suma |
-| 1 mln zdarzeń | 1000/1000 | 126 001 216 = 126 001 216 | 103,6 s | 6 | identyczna suma |
-
-Restart w połowie importu: pierwszy cykl częściowy (~106–114 mln),
-wznowienie kończy import dokładnie na 126 001 216 — bez utraty i bez
-podwójnego doliczenia.
-
-Responsywność podczas importu: overview ~20 ms, analytics ciepła ~1 ms,
-zimna 0,02–0,06 s. Pamięć: tracemalloc szczyt 90 MB (100 tys.) i 270 MB
-(1 mln); pomiar RSS niedostępny na tym hoście (metoda raportowana jako
-null).
-
-## Etap C (Codex) — przyrostowe discovery i pełne pokrycie — IMPLEMENTED AND VERIFIED
-
-Zaimplementowane: discovery zwraca teraz WSZYSTKIE odkryte pliki
-(`discover_all_codex_files`), a nie tylko okno najnowszych; każdy cykl
-przetwarza ograniczoną partię (limit plików), z trwałym kursorem rotacji
-(`codex_cursor` w observer.sqlite) oraz checkpointem na plik (rozmiar +
-licznik odczytu) w tabeli `usage_checkpoint` pod źródłem `codex`; pliki
-już przetworzone i niezmienione są publikowane z pamięci podręcznej
-(nigdy nie znikają ze snapshotu), a nie odczytywane ponownie; pokrycie
-raportowane jest rozdzielnie: `files_found`, `files_complete`,
-`pending_files`, `aggregates_complete`, `catching_up`.
-
-Dowody (lokalnie): `ruff` czysty; `scripts/run_tests.py` 157 testów,
-0 błędów, 2 pominięcia środowiskowe; `npm run check` zielony (odtwarzalny
-build); Playwright 27/27. `tests/test_v6_codex_incremental.py`: 12 plików
-z limitem partii 10 osiąga 12/12 plików i 1860 tokenów w kolejnych
-cyklach (pierwszy cykl niedokończony), a po zakończeniu suma nie rośnie;
-limit 1000 załatwia wszystko w jednym cyklu. Commity: `b4941dd`
-(OpenCode), `b105ecf` (Codex).
-
-Co pozostaje: pola kompletności w API/UI/MCP (metadata vs aggregates vs
-details, stale vs błąd odczytu), następnie Etap D (pełne EN/PL + raport
-zużycia) i Etap E (MCP, build produkcyjny serwowany z dist, migracja
-observer.sqlite, benchmarki końcowe, PR bez scalania).
+- `ruff`, `compileall`, pełne testy Python, self-test, czyste `npm ci`,
+  `npm run check`, Playwright na `dist`, `check_secrets.py`.
+- Benchmarki 100 tys. i 1 mln zdarzeń (te same generatory; suma, cykle,
+  restart w połowie i po imporcie, bez podwójnego liczenia,
+  responsywność; RSS pozostaje `null`, jeśli niedostępny).
+- Dokumentacja: README, README_PL, CHANGELOG, SECURITY, TEST_REPORT,
+  V6_STATUS/HANDOFF + zrzuty EN/PL na syntetycznych danych.
+- Wersja **6.0.0** spójna w backendzie, froncie, CLI, MCP i pakiecie.
+- CI: krok i18n + Playwright na `dist`; przegląd wersji akcji;
+  aktualizacja PR #2 (bez auto-merge, bez force-pusha).
