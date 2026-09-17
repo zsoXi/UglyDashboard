@@ -87,6 +87,7 @@ interface SessionSummary {
   messages: number;
   context_tokens: number | null;
   context_limit: number | null;
+  files: string[];
   errors: number;
   retry_count: number;
   warnings: string[];
@@ -202,6 +203,7 @@ interface SourceStatus {
   total_sessions?: number;
   parts_loaded?: number;
   truncated_sessions?: number;
+  aggregate_truncated_sessions?: number;
   loaded_files?: number;
   truncated?: boolean;
   deadline_exceeded?: boolean;
@@ -250,6 +252,38 @@ interface RouterLedger {
   coverage?: unknown;
 }
 
+/** Structured completeness contract shared by overview, analytics, exports and MCP. */
+interface CoverageBlock {
+  scope: {
+    kind: string;
+    window_limit?: number;
+    sessions_loaded?: number;
+    sessions_in_range?: number;
+    days?: number;
+    project?: string;
+    task_group?: string;
+    source?: string;
+  };
+  metadata_complete: boolean | null;
+  aggregates_complete: boolean | null;
+  history_limited: boolean;
+  breakdowns: { daily: string; model: string; file: string };
+  breakdown_details: Record<string, number>;
+  details_truncated: boolean;
+  detail_events_evicted: number;
+  catching_up: boolean;
+  source_stale: boolean;
+  read_blocked: boolean;
+  discovered_sessions: number | null;
+  processed_sessions: number | null;
+  last_successful_read_at: number | null;
+}
+
+/** Runtime i18n hook exposed for browser tests. */
+interface Window {
+  mcMissingKeys: () => string[];
+}
+
 /** One MCP bridge client declaration. */
 interface McpClient {
   name: string;
@@ -269,7 +303,7 @@ interface Snapshot {
   alerts: AlertRecord[];
   definitions: AgentDefinition[];
   router: RouterLedger[];
-  coverage: SourceStatus[];
+  coverage: CoverageBlock;
   privacy: { show_prompts: boolean; reporting: boolean; abort: boolean };
   mcp_clients?: McpClient[];
   port?: number;
@@ -344,6 +378,7 @@ interface Analytics {
   task_group: string;
   project: string;
   usage_events_dropped: number;
+  coverage: CoverageBlock;
 }
 
 /** Validated observer configuration (`core.default_config`). */

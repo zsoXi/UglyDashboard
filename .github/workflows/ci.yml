@@ -44,6 +44,9 @@ jobs:
       - name: Regression suite (fails on errors and ResourceWarnings)
         run: python -X utf8 scripts/run_tests.py
 
+      - name: Secret leak guard (repo sources + local evidence dirs)
+        run: python -X utf8 scripts/check_secrets.py
+
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:

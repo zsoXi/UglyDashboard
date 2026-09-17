@@ -1,18 +1,19 @@
 {
   "name": "uglydashboard-mission-control",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
-    "lint": "eslint web/app.js scripts/*.mjs eslint.config.mjs",
+    "lint": "eslint web/app.js web/i18n/*.js scripts/*.mjs eslint.config.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "format": "prettier --write web/app.js web/style.css web/index.html scripts/*.mjs eslint.config.mjs tsconfig.json package.json",
-    "format:check": "prettier --check web/app.js web/style.css web/index.html scripts/*.mjs eslint.config.mjs tsconfig.json package.json",
+    "format": "prettier --write web/app.js web/i18n/*.js web/style.css web/index.html scripts/*.mjs eslint.config.mjs tsconfig.json package.json",
+    "format:check": "prettier --check web/app.js web/i18n/*.js web/style.css web/index.html scripts/*.mjs eslint.config.mjs tsconfig.json package.json",
     "build": "node scripts/build.mjs",
-    "check": "npm run lint && npm run typecheck && npm run format:check && npm run build",
+    "check:i18n": "node scripts/check_i18n.mjs",
+    "check": "npm run lint && npm run typecheck && npm run format:check && npm run check:i18n && npm run build",
     "test:browser": "playwright test"
   },
   "devDependencies": {

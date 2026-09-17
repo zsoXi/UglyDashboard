@@ -15,7 +15,9 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-VERSION = "5.0.0"
+from .migration import CONFIG_VERSION
+
+VERSION = "6.0.0"
 
 
 APP = "OpenCode Mission Control"
@@ -265,6 +267,7 @@ def default_config():
         if os.environ.get(env):
             dbs += [Path(os.environ[env]) / "opencode/opencode.db"]
     return {
+        "config_version": CONFIG_VERSION,
         "db_paths": existing_unique(dbs),
         "codex_homes": existing_unique([codehome]),
         "router_events": existing_unique([codehome / "codex-router/usage-events.jsonl"]),
@@ -298,6 +301,10 @@ def validate_config(raw):
     if unknown:
         raise ValueError("Unknown settings: " + ", ".join(sorted(unknown)))
     result.update(raw)
+    if result["config_version"] != CONFIG_VERSION:
+        raise ValueError(
+            f"config_version must be {CONFIG_VERSION}; migrate the state directory first."
+        )
     for key in (
         "db_paths",
         "codex_homes",

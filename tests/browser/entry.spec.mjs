@@ -7,10 +7,10 @@ test('login cover requires an owner key', async ({ page }) => {
   await page.goto(info.url);
   const login = page.locator('#login');
   await expect(login).toBeVisible();
-  await expect(login).toContainText('Klucz właściciela');
+  await expect(login).toContainText('Owner key');
   await page.locator('#login-token').fill('wrong-key');
   await page.locator('#login-form button[type="submit"]').click();
-  await expect(page.locator('#login-error')).toContainText('klucz', { ignoreCase: true });
+  await expect(page.locator('#login-error')).toContainText('key', { ignoreCase: true });
   await expect(login).toBeVisible();
   // The wrong key must actually hit the API and be rejected there (explicit
   // expected failure: non-OK /api/overview is allowed in this test only).
@@ -31,7 +31,7 @@ test.afterEach(async ({}, testInfo) => {
 
 test('owner key via #access fragment logs in and clears the fragment', async ({ page }) => {
   await login(page);
-  await expect(page.locator('#view')).not.toContainText('Odczyt Twoich źródeł');
+  await expect(page.locator('#view')).not.toContainText('Reading your sources');
   await expect(page.locator('.kpi .value').first()).toBeVisible();
 });
 

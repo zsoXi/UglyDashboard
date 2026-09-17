@@ -1,4 +1,16 @@
-'use strict';
+import {
+  applyStatic,
+  formatDateTime,
+  formatMoney,
+  formatNumber,
+  getLanguage,
+  missingKeys,
+  nextLanguage,
+  readPreference,
+  setLanguage,
+  t,
+  writePreference,
+} from './i18n/core.js';
 /** @type {Record<string, string>} */
 const UI_ICONS = {
   overview:
@@ -104,8 +116,7 @@ const HTML_ESCAPES = {
 /** @param {unknown} x @returns {string} */
 const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c);
 /** @param {number | null | undefined} n @returns {string} */
-const fmt = (n) =>
-  n == null ? '—' : Number(n).toLocaleString('pl-PL', { maximumFractionDigits: 0 });
+const fmt = (n) => (n == null ? '—' : formatNumber(n, { maximumFractionDigits: 0 }));
 /** @param {number | null | undefined} n @returns {string} */
 const compact = (n) =>
   n == null
@@ -115,34 +126,31 @@ const compact = (n) =>
       : n >= 1e3
         ? (n / 1e3).toFixed(1) + 'K'
         : fmt(n);
-/** @param {number | null | undefined} t @returns {string} */
-const date = (t) =>
-  t
-    ? new Date(t).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' })
-    : 'brak czasu';
-/** @param {number | null | undefined} t @returns {string} */
-const ago = (t) => {
-  if (!t) return 'brak danych';
-  const s = Math.max(0, (Date.now() - t) / 1000);
+/** @param {number | null | undefined} ts @returns {string} */
+const date = (ts) => (ts ? formatDateTime(ts) : t('time.none'));
+/** @param {number | null | undefined} ts @returns {string} */
+const ago = (ts) => {
+  if (!ts) return t('time.unknown');
+  const s = Math.max(0, (Date.now() - ts) / 1000);
   return s < 60
-    ? Math.floor(s) + ' s temu'
+    ? t('time.ago.seconds', { n: Math.floor(s) })
     : s < 3600
-      ? Math.floor(s / 60) + ' min temu'
+      ? t('time.ago.minutes', { n: Math.floor(s / 60) })
       : s < 86400
-        ? Math.floor(s / 3600) + ' godz. temu'
-        : Math.floor(s / 86400) + ' dni temu';
+        ? t('time.ago.hours', { n: Math.floor(s / 3600) })
+        : t('time.ago.days', { n: Math.floor(s / 86400) });
 };
 /** @param {number | null | undefined} s @returns {string} */
 const duration = (s) =>
   s == null
     ? '—'
     : s >= 3600
-      ? (s / 3600).toFixed(1) + ' h'
+      ? t('duration.hours', { n: (s / 3600).toFixed(1) })
       : s >= 60
-        ? Math.round(s / 60) + ' min'
-        : Math.round(s) + ' s';
+        ? t('duration.minutes', { n: Math.round(s / 60) })
+        : t('duration.seconds', { n: Math.round(s) });
 /** @param {number | null | undefined} n @returns {string} */
-const money = (n) => (n == null ? '—' : '$' + Number(n).toFixed(3));
+const money = (n) => (n == null ? '—' : formatMoney(n));
 /** @param {SessionSummary} s @returns {boolean} */
 const active = (s) => ['running', 'tool', 'thinking'].includes(s.state);
 /** @param {unknown} x @param {string} [cls] @returns {string} */
@@ -182,6 +190,8 @@ let timelineQuery = '';
 let graphPose = { x: 20, y: 28, k: 1 };
 let graphDragged = false;
 let days = 0;
+let reasoningFolded = false;
+let percentMode = false;
 let taskGroup = '';
 let cardsMode = localStorage.getItem('mc-cards') === '1';
 /** @type {Set<string> | null} */
@@ -189,46 +199,24 @@ let knownAlerts = null;
 /** @type {IntegrationInfo | null} */
 let INTEGRATION = null;
 let inspectSeq = 0;
-/** @type {Record<string, [string, string]>} */
-const titles = {
-  overview: [
-    'Centrum operacyjne',
-    'Każdy projekt. Każdy agent. Jeden obraz pracy, oparty na rzeczywistych źródłach.',
-  ],
-  projects: [
-    'Twoje projekty',
-    'Osobne przestrzenie pracy, wspólny obraz sytuacji. Bez zgadywania, który projekt jest który.',
-  ],
-  agents: [
-    'Agenci i sesje',
-    'Bieżące stany obok dowodów. Definicje agentów nie są liczone jako uruchomienia.',
-  ],
-  graph: [
-    'Graf zespołów',
-    'Rzeczywiste relacje sesji. Linia ciągła oznacza potwierdzoną delegację, przerywana relację niepotwierdzoną lub fork.',
-  ],
-  timeline: [
-    'Historia zdarzeń',
-    'Wspólna historia OpenCode, Codex, MCP i interwencji właściciela.',
-  ],
-  analytics: [
-    'Modele i zużycie',
-    'Tokeny to pomiar wykorzystania, nie ocena jakości. Wyniki testów i review wymagają rzeczywistych danych.',
-  ],
-  alerts: [
-    'Wymaga uwagi',
-    'Sygnały do sprawdzenia. Żaden alert nie uruchamia automatycznej interwencji.',
-  ],
-  integrations: [
-    'Źródła i MCP',
-    'Połącz lokalne źródła. Udostępnij panel Codexowi i ChatGPT przez chroniony most MCP.',
-  ],
-  settings: [
-    'Ustawienia obserwatora',
-    'Zakres odczytu, reguły i prywatność. Zmiany dotyczą panelu, nie konfiguracji Twoich agentów.',
-  ],
-};
-if (!titles[view]) view = 'overview';
+/** View titles are rebuilt from the active dictionaries, so a language switch
+ * re-renders every label consistently.
+ * @returns {Record<string, [string, string]>}
+ */
+function titles() {
+  return {
+    overview: [t('view.overview.title'), t('view.overview.subtitle')],
+    projects: [t('view.projects.title'), t('view.projects.subtitle')],
+    agents: [t('view.agents.title'), t('view.agents.subtitle')],
+    graph: [t('view.graph.title'), t('view.graph.subtitle')],
+    timeline: [t('view.timeline.title'), t('view.timeline.subtitle')],
+    analytics: [t('view.analytics.title'), t('view.analytics.subtitle')],
+    alerts: [t('view.alerts.title'), t('view.alerts.subtitle')],
+    integrations: [t('view.integrations.title'), t('view.integrations.subtitle')],
+    settings: [t('view.settings.title'), t('view.settings.subtitle')],
+  };
+}
+if (!titles()[view]) view = 'overview';
 /** Reads an owner token from the #access fragment, stores it and clears the
  * fragment so the secret never stays in the address bar. Runs on first load
  * and again on hashchange, because navigating to the same document with a new
@@ -249,6 +237,16 @@ window.addEventListener('hashchange', () => {
 });
 let theme = localStorage.getItem('mc-theme') || 'dark';
 document.documentElement.dataset.theme = theme;
+setLanguage(readPreference('mc-lang', 'en'));
+applyStatic(document);
+window.mcMissingKeys = missingKeys;
+/** Keeps the topbar language chip in sync with the active language.
+ * @returns {void}
+ */
+function syncLang() {
+  $('lang-code').textContent = getLanguage().toUpperCase();
+}
+syncLang();
 /** @param {string} text @param {boolean} [error] @returns {void} */
 function toast(text, error = false) {
   const el = document.createElement('div');
@@ -285,14 +283,14 @@ async function api(path, body) {
   const res = await fetch(path, opts);
   if (res.status === 401) {
     $('login').hidden = false;
-    throw new Error('Potrzebny klucz właściciela.');
+    throw new Error(t('error.login_required'));
   }
   /** @type {unknown} */
   let data;
   try {
     data = await res.json();
   } catch (cause) {
-    throw new Error('Nieprawidłowa odpowiedź serwera.', { cause });
+    throw new Error(t('error.bad_response'), { cause });
   }
   if (!res.ok) throw new Error(errorText(data) || 'HTTP ' + res.status);
   return data;
@@ -323,13 +321,7 @@ function selectedSessions() {
 }
 /** @returns {void} */
 function head() {
-  const title =
-    view === 'overview'
-      ? [
-          'Centrum operacyjne',
-          'Każdy projekt. Każdy agent. Jeden obraz pracy, oparty na rzeczywistych źródłach.',
-        ]
-      : titles[view];
+  const title = [t('view.' + view + '.title'), t('view.' + view + '.subtitle')];
   const searchWrap = $input('search').closest('.search-wrap');
   if (searchWrap instanceof HTMLElement) searchWrap.hidden = view === 'analytics';
   $input('search').hidden = view === 'analytics';
@@ -338,19 +330,7 @@ function head() {
   $('subtitle').textContent = title[1];
   $('crumb').textContent = title[0];
   $('filters').hidden = ['integrations', 'settings', 'timeline', 'alerts'].includes(view);
-  /** @type {Record<string, string>} */
-  const labels = {
-    overview: 'YOUR WORKSPACE / AT A GLANCE',
-    projects: 'WORKSPACES / PROJECT INTELLIGENCE',
-    agents: 'OPERATIONS / AGENT INSPECTOR',
-    graph: 'TOPOLOGY / VERIFIED RELATIONSHIPS',
-    timeline: 'OBSERVABILITY / EVENT STREAM',
-    analytics: 'ANALYTICS / MEASURED USAGE',
-    alerts: 'ATTENTION / HUMAN IN CONTROL',
-    integrations: 'CONNECTIONS / LOCAL + MCP',
-    settings: 'SYSTEM / WORKSPACE SETTINGS',
-  };
-  $('eyebrow').textContent = labels[view] || 'MISSION CONTROL';
+  $('eyebrow').textContent = t('view.' + view + '.eyebrow');
   htmlAll('.nav [data-view]').forEach((button) => {
     const current = button.dataset.view === view;
     button.classList.toggle('active', current);
@@ -359,20 +339,20 @@ function head() {
   });
   $('viewtag').textContent =
     view === 'graph'
-      ? 'VERIFIED RELATIONS'
+      ? t('viewtag.relations')
       : view === 'integrations'
-        ? 'AUTHENTICATED MCP'
-        : 'OBSERVER MODE';
-  document.title = title[0] + ' · UglyDashboard';
+        ? t('viewtag.mcp')
+        : t('viewtag.observer');
+  document.title = title[0] + ' · ' + t('brand.name');
 }
 
 /** @param {string} v @returns {Promise<void>} */
 async function go(v) {
-  if (!titles[v]) return;
+  if (!titles()[v]) return;
   view = v;
   localStorage.setItem('mc-view', v);
   head();
-  $('view').innerHTML = '<div class="loading">Ładowanie widoku…</div>';
+  $('view').innerHTML = '<div class="loading">' + esc(t('loading.view')) + '</div>';
   await render(true);
 }
 /** @param {string} title @param {string} text @param {string} [button] @returns {string} */
@@ -381,33 +361,61 @@ function empty(title, text, button = '') {
     '<div class="empty"><h3>' + esc(title) + '</h3><p>' + esc(text) + '</p>' + button + '</div>'
   );
 }
-/** @returns {string} */
+/** Renders the structured completeness contract from the backend:
+ * availability, metadata, aggregates, breakdowns, details, freshness,
+ * progress and errors. Complete aggregates with a limited detail window are
+ * informative, not a warning.
+ * @param {CoverageBlock | null | undefined} cov
+ * @param {number | null | undefined} [windowLimit]
+ * @returns {string}
+ */
+function coverageNotice(cov, windowLimit) {
+  const c = cov;
+  if (!c || Array.isArray(c)) return '';
+  const breakdowns = c.breakdowns || {};
+  /** @type {Array<'daily' | 'model' | 'file'>} */
+  const breakdownKeys = ['daily', 'model', 'file'];
+  const names = breakdownKeys
+    .filter((k) => breakdowns[k] === 'partial')
+    .map((k) => t('breakdown.' + (k === 'file' ? 'files' : k)));
+  const lines = [];
+  let degraded = false;
+  if (c.aggregates_complete === false) {
+    degraded = true;
+    lines.push(t(c.catching_up ? 'coverage.catching_up' : 'coverage.aggregates_partial'));
+  } else if (c.aggregates_complete === true && c.details_truncated) {
+    lines.push(t('coverage.complete_limited'));
+  }
+  if (c.metadata_complete === false) {
+    const fromScope =
+      c.scope && typeof c.scope.window_limit === 'number' ? c.scope.window_limit : null;
+    const limit = fromScope ?? (typeof windowLimit === 'number' ? windowLimit : null);
+    lines.push(t('coverage.history_limited', { limit: limit === null ? '—' : fmt(limit) }));
+  }
+  if (names.length) lines.push(t('coverage.breakdowns_partial', { names: names.join(', ') }));
+  if (c.detail_events_evicted) lines.push(t('coverage.evicted', { n: c.detail_events_evicted }));
+  if (c.source_stale) {
+    degraded = true;
+    lines.push(t('coverage.source_stale'));
+  }
+  if (c.read_blocked) {
+    degraded = true;
+    lines.push(t('coverage.read_blocked'));
+  }
+  if (!lines.length) return '';
+  lines.push(t('coverage.hint'));
+  return (
+    '<div class="notice coverage-note' +
+    (degraded ? ' coverage-degraded' : '') +
+    '" role="status">' +
+    esc(lines.join(' ')) +
+    '</div>'
+  );
+}
+/** Snapshot completeness for the shell views. @returns {string} */
 function coverage() {
   if (!SNAP) return '';
-  const warnings = SNAP.coverage || [];
-  if (!warnings.length) return '';
-  const detail = warnings
-    .map((s) => {
-      const loaded = s.loaded_sessions;
-      const total = s.total_sessions;
-      const counted =
-        typeof loaded === 'number' && typeof total === 'number' && loaded < total
-          ? 'niepełne: ' + loaded + ' z ' + total + ' sesji'
-          : 'niepełne: pokazano wybrany fragment historii';
-      const reason = s.catching_up
-        ? 'trwa odczyt dużych plików'
-        : s.deadline_exceeded || s.truncated
-          ? 'przekroczono limit odczytu'
-          : 'część danych poza oknem';
-      return esc(s.label) + ' — ' + counted + ' (' + reason + ')';
-    })
-    .join('; ');
-  return (
-    '<div class="notice coverage-note" role="status">Statystyki niepełne — to nie cała ' +
-    'historia. ' +
-    detail +
-    '. Otwórz Źródła i MCP, aby zobaczyć pełny zakres.</div>'
-  );
+  return coverageNotice(SNAP.coverage, SNAP.coverage?.scope?.window_limit);
 }
 /** @param {SessionSummary[]} sessions @returns {string} */
 function statsCards(sessions) {
@@ -425,36 +433,22 @@ function statsCards(sessions) {
   const cards = [
     [
       'green',
-      'Aktywni · potwierdzeni',
+      t('kpi.active.label'),
       verified,
-      unverified + ' dodatkowych wg logu lub raportu',
+      t('kpi.active.note', { n: unverified }),
       'pulse',
       'agents',
     ],
     [
       '',
-      'Projekty w widoku',
+      t('kpi.projects.label'),
       projects,
-      sessions.length + ' sesji w załadowanym oknie',
+      t('kpi.projects.note', { n: sessions.length }),
       'projects',
       'projects',
     ],
-    [
-      '',
-      'Zużyte tokeny',
-      compact(tokens),
-      'Źródła natywne · bez dublowania routera',
-      'analytics',
-      'analytics',
-    ],
-    [
-      alerts ? 'red' : '',
-      'Wymaga Twojej uwagi',
-      alerts,
-      'Alerty oczekujące na potwierdzenie',
-      'alerts',
-      'alerts',
-    ],
+    ['', t('kpi.tokens.label'), compact(tokens), t('kpi.tokens.note'), 'analytics', 'analytics'],
+    [alerts ? 'red' : '', t('kpi.alerts.label'), alerts, t('kpi.alerts.note'), 'alerts', 'alerts'],
   ];
   return (
     '<div class="kpis">' +
@@ -487,8 +481,8 @@ function campus(project) {
   return (
     '<article class="panel campus" tabindex="0" role="button" data-project="' +
     esc(project.path) +
-    '" aria-label="Otwórz projekt ' +
-    esc(project.name) +
+    '" aria-label="' +
+    esc(t('campus.open.aria', { name: project.name })) +
     '">' +
     '<div class="campus-head"><div class="projectglyph">' +
     esc(project.name.slice(0, 2).toUpperCase()) +
@@ -505,35 +499,49 @@ function campus(project) {
     '</span></div>' +
     '<div class="statrow"><div><strong>' +
     fmt(project.active) +
-    '</strong><small>aktywnych · API</small></div>' +
+    '</strong><small>' +
+    esc(t('campus.active.api')) +
+    '</small></div>' +
     '<div><strong>' +
     compact(project.tokens) +
-    '</strong><small>tokeny w oknie</small></div>' +
+    '</strong><small>' +
+    esc(t('campus.tokens')) +
+    '</small></div>' +
     '<div><strong>' +
     fmt(project.sessions) +
-    '</strong><small>sesje</small></div></div>' +
+    '</strong><small>' +
+    esc(t('campus.sessions')) +
+    '</small></div></div>' +
     '<div class="campus-bottom"><div class="chips">' +
     project.sources.map((s) => source(s)).join('') +
     '</div>' +
     '<span class="branch-label" title="' +
-    esc(project.git?.branch || 'Git niedostępny') +
+    esc(project.git?.branch || t('git.unavailable')) +
     '">' +
     uiIcon('graph') +
-    esc(project.git?.branch || 'bez Git') +
+    esc(project.git?.branch || t('git.none')) +
     '</span></div></article>'
   );
 }
 
 /** @param {SessionSummary[]} rows @param {number} [max] @returns {string} */
 function sessionTable(rows, max = 200) {
-  if (!rows.length)
-    return empty(
-      'Brak sesji w tym widoku',
-      'Wyczyść filtry lub podłącz źródła, aby zobaczyć rzeczywiste sesje.',
-    );
+  if (!rows.length) return empty(t('table.empty.title'), t('table.empty.text'));
   return (
     '<div class="tablewrap"><table class="table"><thead><tr>' +
-    '<th>Agent / zadanie</th><th>Stan / dowód</th><th>Model</th><th>Projekt</th><th class="right">Tokeny</th><th>Aktywność</th>' +
+    '<th>' +
+    esc(t('table.agent')) +
+    '</th><th>' +
+    esc(t('table.state')) +
+    '</th><th>' +
+    esc(t('table.model')) +
+    '</th><th>' +
+    esc(t('table.project')) +
+    '</th><th class="right">' +
+    esc(t('table.tokens')) +
+    '</th><th>' +
+    esc(t('table.activity')) +
+    '</th>' +
     '</tr></thead><tbody>' +
     rows
       .slice(0, max)
@@ -541,8 +549,8 @@ function sessionTable(rows, max = 200) {
         (s) =>
           '<tr data-inspect="' +
           esc(s.id) +
-          '" tabindex="0" role="button" aria-label="Sprawdź sesję ' +
-          esc(s.agent) +
+          '" tabindex="0" role="button" aria-label="' +
+          esc(t('table.inspect.aria', { agent: s.agent })) +
           '">' +
           '<td><div class="agent-name"><span class="agent-avatar">' +
           uiIcon('agents') +
@@ -565,7 +573,7 @@ function sessionTable(rows, max = 200) {
           '">' +
           esc(truncate(s.model, 35)) +
           '</div><div class="under">' +
-          esc(s.origin === 'unknown' ? 'inicjator nieustalony' : s.origin) +
+          esc(s.origin === 'unknown' ? t('origin.unknown') : s.origin) +
           '</div></td>' +
           '<td><div class="name">' +
           esc(s.project) +
@@ -582,11 +590,9 @@ function sessionTable(rows, max = 200) {
       .join('') +
     '</tbody></table></div>' +
     (rows.length > max
-      ? '<p class="note table-coverage">Pokazano ' +
-        max +
-        ' z ' +
-        rows.length +
-        ' pasujących sesji. Zawęź filtry.</p>'
+      ? '<p class="note table-coverage">' +
+        esc(t('table.coverage', { max, total: rows.length })) +
+        '</p>'
       : '')
   );
 }
@@ -610,13 +616,14 @@ function agentCard(s) {
     esc(s.project) +
     '</span><span>' +
     (s.usage_known ? compact(s.usage.total) : '—') +
-    ' tok</span></div></article>'
+    ' ' +
+    esc(t('card.tokens_suffix')) +
+    '</span></div></article>'
   );
 }
 /** @param {TimelineEvent[]} events @param {number} [max] @returns {string} */
 function eventList(events, max = 20) {
-  if (!events.length)
-    return '<p class="note">Nie zarejestrowano jeszcze zdarzeń w tym zakresie.</p>';
+  if (!events.length) return '<p class="note">' + esc(t('events.none')) + '</p>';
   return (
     '<div class="activitylist">' +
     events
@@ -655,7 +662,7 @@ function sourcesMini() {
         '"></span><span class="label">' +
         esc(s.label) +
         '</span><span class="small">' +
-        esc(s.ok ? 'połączono' : s.error ? 'błąd' : 'brak źródła') +
+        esc(s.ok ? t('source.connected') : s.error ? t('source.error') : t('source.missing')) +
         '</span></div>',
     )
     .join('');
@@ -673,21 +680,43 @@ async function render(force = false) {
     box.innerHTML =
       statsCards(rows) +
       coverage() +
-      '<div class="sectionhead"><h2>Przestrzenie pracy <span>' +
+      '<div class="sectionhead"><h2>' +
+      esc(t('overview.workspaces')) +
+      ' <span>' +
       ps.length +
-      '</span></h2><button data-view="projects">Wszystkie projekty ↗</button></div>' +
+      '</span></h2><button data-view="projects">' +
+      esc(t('overview.all_projects')) +
+      '</button></div>' +
       (ps.length
         ? '<div class="grid3">' + ps.slice(0, 6).map(campus).join('') + '</div>'
         : empty(
-            'Czas podłączyć Twoją fabrykę agentów',
-            'Wybierz katalogi projektów i źródła danych. Panel nie tworzy demonstracyjnych workerów.',
-            '<button class="primary" data-view="integrations">Dodaj źródła</button>',
+            t('overview.connect.title'),
+            t('overview.connect.text'),
+            '<button class="primary" data-view="integrations">' +
+              esc(t('overview.connect.button')) +
+              '</button>',
           )) +
-      '<div class="sectionhead"><h2>Ostatnie i aktywne sesje</h2><button data-view="agents">Inspektor agentów ↗</button></div><div class="panel">' +
+      '<div class="sectionhead"><h2>' +
+      esc(t('overview.recent')) +
+      '</h2><button data-view="agents">' +
+      esc(t('overview.inspector')) +
+      '</button></div><div class="panel">' +
       sessionTable(rows, 8) +
-      '</div><div class="grid2" style="margin-top:18px"><div class="panel"><div class="paneltitle"><h2>Strumień zdarzeń</h2><button class="smallbtn" data-view="timeline">Otwórz</button></div><div id="overview-events"><p class="note">Odczyt historii…</p></div></div><div class="panel"><div class="paneltitle"><h2>Łączność</h2><span class="eyebrow">SOURCE HEALTH</span></div>' +
+      '</div><div class="grid2" style="margin-top:18px"><div class="panel"><div class="paneltitle"><h2>' +
+      esc(t('overview.events')) +
+      '</h2><button class="smallbtn" data-view="timeline">' +
+      esc(t('overview.open')) +
+      '</button></div><div id="overview-events"><p class="note">' +
+      esc(t('loading.history')) +
+      '</p></div></div><div class="panel"><div class="paneltitle"><h2>' +
+      esc(t('overview.health')) +
+      '</h2><span class="eyebrow">' +
+      esc(t('overview.health.eyebrow')) +
+      '</span></div>' +
       sourcesMini() +
-      '<div class="notice info">Potwierdzone aktywne: odczyt API OpenCode. Znaczniki w logach Codexa i raporty MCP mają osobną klasę pewności.</div></div></div>';
+      '<div class="notice info">' +
+      esc(t('overview.health.note')) +
+      '</div></div></div>';
     try {
       const data = /** @type {TimelineResponse} */ (await api('/api/timeline?limit=12'));
       if (seq === renderSeq && $('overview-events'))
@@ -707,9 +736,9 @@ async function render(force = false) {
       (ps.length
         ? '<div class="grid3">' + ps.map(campus).join('') + '</div>'
         : empty(
-            'Brak projektów',
-            'Zeskanuj wybrane foldery lub dopisz ścieżki w ustawieniach.',
-            '<button data-view="integrations">Otwórz źródła</button>',
+            t('projects.empty.title'),
+            t('projects.empty.text'),
+            '<button data-view="integrations">' + esc(t('projects.empty.button')) + '</button>',
           )) +
       ps
         .map(
@@ -717,10 +746,12 @@ async function render(force = false) {
             '<div class="sectionhead"><h2>' +
             esc(p.name) +
             ' <span>' +
-            esc(p.git?.branch || 'Git niedostępny') +
+            esc(p.git?.branch || t('git.unavailable')) +
             '</span></h2><button data-project="' +
             esc(p.path) +
-            '">Sesje projektu ↗</button></div><div class="panel">' +
+            '">' +
+            esc(t('projects.sessions.button')) +
+            '</button></div><div class="panel">' +
             (p.git?.commits?.length
               ? '<div class="activitylist">' +
                 p.git.commits
@@ -737,56 +768,116 @@ async function render(force = false) {
                   )
                   .join('') +
                 '</div>'
-              : '<p class="note">' +
-                esc(p.git?.error || 'Nie odczytano historii Git dla tego folderu.') +
-                '</p>') +
-            '<p class="note" style="margin-top:14px">Commit jest kontekstem projektu. Panel nie przypisuje mu fikcyjnego kosztu z całych poprzednich 24 godzin.</p></div>',
+              : '<p class="note">' + esc(p.git?.error || t('projects.git.error')) + '</p>') +
+            '<p class="note" style="margin-top:14px">' +
+            esc(t('projects.commit.note')) +
+            '</p></div>',
         )
         .join('');
   } else if (view === 'agents') {
     box.innerHTML =
       statsCards(rows) +
       coverage() +
-      '<div class="sectionhead"><h2>Uruchomienia <span>' +
+      '<div class="sectionhead"><h2>' +
+      esc(t('agents.runs')) +
+      ' <span>' +
       rows.length +
       '</span></h2><div class="view-controls"><button data-mode="table" class="smallbtn ' +
       (!cardsMode ? 'active' : '') +
-      '">Tabela</button><button data-mode="cards" class="smallbtn ' +
+      '">' +
+      esc(t('agents.mode.table')) +
+      '</button><button data-mode="cards" class="smallbtn ' +
       (cardsMode ? 'active' : '') +
-      '">Karty</button></div></div>' +
+      '">' +
+      esc(t('agents.mode.cards')) +
+      '</button></div></div>' +
       (cardsMode
         ? '<div class="agentcards">' + rows.slice(0, 200).map(agentCard).join('') + '</div>'
         : '<div class="panel">' + sessionTable(rows) + '</div>');
   } else if (view === 'graph') {
     if (force || !$svg('graph-svg')) {
       box.innerHTML =
-        '<div class="notice info">Graf nie wymyśla CTO ani TL na podstawie nazw. Pokazuje identyfikatory i relacje istniejące w źródłach. Przesuwaj tło, używaj kółka lub przycisków powiększenia.</div><div class="graphwrap" id="graph-wrap"><div class="graph-toolbar"><button data-zoom="in" aria-label="Powiększ">+</button><button data-zoom="out" aria-label="Pomniejsz">−</button><button data-zoom="fit">Dopasuj</button></div><svg id="graph-svg" aria-label="Graf relacji agentów" role="img"><g id="graph-layer"></g></svg><div class="graphlegend"><span>━ potwierdzona delegacja</span><span>┄ fork / niepotwierdzony rodzic</span><span id="graph-count"></span></div></div>';
+        '<div class="notice info">' +
+        esc(t('graph.notice')) +
+        '</div><div class="graphwrap" id="graph-wrap"><div class="graph-toolbar"><button data-zoom="in" aria-label="' +
+        esc(t('graph.zoom.in')) +
+        '">+</button><button data-zoom="out" aria-label="' +
+        esc(t('graph.zoom.out')) +
+        '">−</button><button data-zoom="fit">' +
+        esc(t('graph.zoom.fit')) +
+        '</button></div><svg id="graph-svg" aria-label="' +
+        esc(t('graph.svg.aria')) +
+        '" role="img"><g id="graph-layer"></g></svg><div class="graphlegend"><span>' +
+        esc(t('graph.legend.confirmed')) +
+        '</span><span>' +
+        esc(t('graph.legend.fork')) +
+        '</span><span id="graph-count"></span></div></div>';
       bindGraph();
     }
     if (!graphDragged) drawGraph(rows);
   } else if (view === 'timeline') {
     if (force || !$('timeline-events')) {
       box.innerHTML =
-        '<div class="panel"><div class="formrow"><label>Przeszukaj historię<input id="timeline-query" placeholder="np. retry, test, nazwa agenta…" value="' +
+        '<div class="panel"><div class="formrow"><label>' +
+        esc(t('timeline.search.label')) +
+        '<input id="timeline-query" placeholder="' +
+        esc(t('timeline.search.placeholder')) +
+        '" value="' +
         esc(timelineQuery) +
-        '"></label><button id="timeline-search">Szukaj</button></div><div class="notice info">Paginacja według kolejności zapisu do obserwatora; w pobranym fragmencie sortujemy po czasie zdarzenia. Starsze logi mogą zostać zaimportowane później.</div><div id="timeline-events"></div><button id="timeline-more" class="smallbtn" style="margin-top:16px">Wczytaj więcej</button></div>';
+        '"></label><button id="timeline-search">' +
+        esc(t('timeline.search.button')) +
+        '</button></div><div class="notice info">' +
+        esc(t('timeline.notice')) +
+        '</div><div id="timeline-events"></div><button id="timeline-more" class="smallbtn" style="margin-top:16px">' +
+        esc(t('timeline.more')) +
+        '</button></div>';
       await loadTimeline(false);
     }
   } else if (view === 'analytics') {
     if (force || !$('analytics-results')) {
       box.innerHTML =
-        '<div class="panel"><div class="formrow"><label>Okres<select id="days"><option value="0">Załadowana historia</option><option value="7">Ostatnie 7 dni</option><option value="30">Ostatnie 30 dni</option><option value="90">Ostatnie 90 dni</option><option value="365">Ostatni rok</option></select></label><label>Porównywalna grupa zadań<input id="task-group" placeholder="np. dashboard-ui-benchmark" value="' +
+        '<div class="panel"><div class="formrow"><label>' +
+        esc(t('analytics.period')) +
+        '<select id="days"><option value="1">' +
+        esc(t('analytics.period.today')) +
+        '</option><option value="7">' +
+        esc(t('analytics.period.7')) +
+        '</option><option value="30">' +
+        esc(t('analytics.period.30')) +
+        '</option><option value="90">' +
+        esc(t('analytics.period.90')) +
+        '</option><option value="365">' +
+        esc(t('analytics.period.365')) +
+        '</option><option value="0">' +
+        esc(t('analytics.period.all')) +
+        '</option></select></label><label>' +
+        esc(t('analytics.group.label')) +
+        '<input id="task-group" placeholder="' +
+        esc(t('analytics.group.placeholder')) +
+        '" value="' +
         esc(taskGroup) +
-        '"></label><button id="analytics-apply">Zastosuj</button><button data-export="json">JSON</button><button data-export="csv">CSV</button></div><p class="note" style="margin-top:12px">Modelom przypisujemy rzeczywiste tokeny. Wyniki testów, czas i poprawki zapisujesz w inspektorze. Brak oceny pozostaje brakiem oceny.</p></div><div id="analytics-results"><div class="loading">Obliczanie…</div></div>';
+        '"></label><button id="analytics-apply">' +
+        esc(t('analytics.apply')) +
+        '</button><button data-export="json">JSON</button><button data-export="csv">CSV</button></div><p class="note" style="margin-top:12px">' +
+        esc(t('analytics.note')) +
+        '</p><p class="note">' +
+        esc(t('analytics.scope_note')) +
+        '</p></div><div id="analytics-results"><div class="loading">' +
+        esc(t('loading.analytics')) +
+        '</div></div>';
       $select('days').value = String(days);
     }
     await loadAnalytics(seq);
   } else if (view === 'alerts') {
     const alerts = SNAP.alerts;
     box.innerHTML =
-      '<div class="sectionhead"><h2>Sygnały <span>' +
-      alerts.filter((a) => !a.acknowledged).length +
-      ' nowych</span></h2><button id="ack-all">Przyjmij wszystkie do wiadomości</button></div>' +
+      '<div class="sectionhead"><h2>' +
+      esc(t('alerts.heading')) +
+      ' <span>' +
+      esc(t('alerts.new', { n: alerts.filter((a) => !a.acknowledged).length })) +
+      '</span></h2><button id="ack-all">' +
+      esc(t('alerts.ack_all')) +
+      '</button></div>' +
       (alerts.length
         ? alerts
             .map(
@@ -797,34 +888,41 @@ async function render(force = false) {
                 '"><div class="body"><small>' +
                 esc(a.kind) +
                 '</small><h3>' +
-                esc(a.severity === 'danger' ? 'Wysoki priorytet' : 'Do sprawdzenia') +
+                esc(
+                  a.severity === 'danger'
+                    ? t('alerts.severity.danger')
+                    : t('alerts.severity.default'),
+                ) +
                 '</h3><p>' +
                 esc(a.text) +
                 '</p></div><div class="actions">' +
                 (a.session_id
                   ? '<button class="smallbtn" data-inspect="' +
                     esc(a.session_id) +
-                    '">Inspektor</button>'
+                    '">' +
+                    esc(t('alerts.inspect')) +
+                    '</button>'
                   : '') +
                 (!a.acknowledged
-                  ? '<button class="smallbtn" data-ack="' + esc(a.id) + '">Przyjmij</button>'
-                  : badge('przyjęto')) +
+                  ? '<button class="smallbtn" data-ack="' +
+                    esc(a.id) +
+                    '">' +
+                    esc(t('alerts.ack')) +
+                    '</button>'
+                  : badge(t('alerts.acked'))) +
                 '</div></article>',
             )
             .join('')
-        : empty(
-            'Nic nie wymaga interwencji',
-            'Nie wykryto alertów w aktualnie załadowanych źródłach. To nie jest gwarancja braku błędów w kodzie.',
-          ));
+        : empty(t('alerts.empty.title'), t('alerts.empty.text')));
   } else if (view === 'integrations') {
     if (force) await integrations(seq);
   } else if (view === 'settings') {
     if (force) await settings(seq);
   }
 }
-/** @param {UsageDay[]} data @returns {string} */
-function chart(data) {
-  if (!data.length) return '<p class="note">Brak rekordów zużycia w tym okresie.</p>';
+/** @param {UsageDay[]} data @param {boolean} [fold] @returns {string} */
+function chart(data, fold = false) {
+  if (!data.length) return '<p class="note">' + esc(t('analytics.chart.none')) + '</p>';
   const rows = data.slice(-120),
     w = 960,
     h = 210,
@@ -836,7 +934,9 @@ function chart(data) {
     w +
     ' ' +
     h +
-    '" role="img" aria-label="Dzienne zużycie tokenów">';
+    '" role="img" aria-label="' +
+    esc(t('analytics.chart.aria')) +
+    '">';
   for (let i = 0; i < 3; i++) {
     let y = p + (i * (h - p * 2)) / 2;
     out +=
@@ -845,7 +945,9 @@ function chart(data) {
   rows.forEach((d, i) => {
     let acc = 0;
     keys.forEach((k) => {
+      if (fold && k === 'reasoning') return;
       let v = d[k] || 0;
+      if (fold && k === 'output') v += d.reasoning || 0;
       if (v <= 0) return;
       let barh = (v / m) * (h - 2 * p);
       out +=
@@ -870,11 +972,107 @@ function chart(data) {
   });
   return (
     out +
-    '</svg><div class="legend"><span><i style="background:var(--accent)"></i>input bez cache</span><span><i style="background:var(--green)"></i>output</span><span><i style="background:var(--purple)"></i>reasoning</span><span><i style="background:var(--amber)"></i>cache</span></div>' +
-    (data.length > 120
-      ? '<p class="note">Wykres: ostatnie 120 dni z rekordami. Eksport obejmuje cały wybrany zakres.</p>'
-      : '')
+    '</svg><div class="legend"><span><i style="background:var(--accent)"></i>' +
+    esc(t('legend.input')) +
+    '</span><span><i style="background:var(--green)"></i>' +
+    esc(t('legend.output')) +
+    '</span><span><i style="background:var(--purple)"></i>' +
+    esc(t('legend.reasoning')) +
+    '</span><span><i style="background:var(--amber)"></i>' +
+    esc(t('legend.cache')) +
+    '</span></div>' +
+    (data.length > 120 ? '<p class="note">' + esc(t('analytics.chart.window')) + '</p>' : '')
   );
+}
+/** Inclusive local-calendar cutoff matching the backend period filter.
+ * @returns {number}
+ */
+function periodCutoff() {
+  if (!days) return 0;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+  return start.getTime();
+}
+/** Sessions of the loaded window matching the current source/project/period
+ * filters. Reported-only sessions never carry native tokens here.
+ * @returns {SessionSummary[]}
+ */
+function filteredPeriodSessions() {
+  if (!SNAP) return [];
+  const cutoff = periodCutoff();
+  const project = $select('project-filter').value;
+  const src = $select('source-filter').value;
+  return SNAP.sessions.filter(
+    (s) =>
+      s.source !== 'reported' &&
+      (!project || s.directory === project) &&
+      (!src || s.source === src) &&
+      (!cutoff || s.updated >= cutoff),
+  );
+}
+/** Presentation-only composition of the period tokens as percentages. The
+ * totals are untouched; components stay disjoint (reasoning folded into
+ * output only when the user asks for it).
+ * @param {UsageDay[]} data @returns {string}
+ */
+function percentChart(data) {
+  /** @type {Record<string, number>} */
+  const sums = {};
+  keys.forEach((k) => (sums[k] = 0));
+  data.forEach((d) => keys.forEach((k) => (sums[k] += d[k] || 0)));
+  if (reasoningFolded) {
+    sums.output += sums.reasoning;
+    sums.reasoning = 0;
+  }
+  const total = keys.reduce((n, k) => n + sums[k], 0);
+  if (!total) return '<p class="note">' + esc(t('analytics.chart.none')) + '</p>';
+  /** @param {string} k @returns {number} */
+  const pct = (k) => Math.round((sums[k] / total) * 1000) / 10;
+  return (
+    '<div class="chart-percent" role="img" aria-label="' +
+    esc(t('analytics.chart.percent_aria')) +
+    '"><div class="meter">' +
+    keys.map((k) => '<span class="' + k + '" style="width:' + pct(k) + '%"></span>').join('') +
+    '</div>' +
+    keys
+      .map(
+        (k) =>
+          '<div class="statusline"><span class="label">' +
+          esc(t('legend.' + (k === 'cache_read' || k === 'cache_write' ? 'cache' : k))) +
+          '</span><span class="num">' +
+          pct(k) +
+          '%</span></div>',
+      )
+      .join('') +
+    '</div>'
+  );
+}
+/** @param {SessionSummary[]} sessions @returns {string} */
+function projectRows(sessions) {
+  /** @type {Map<string, {name: string, sessions: number, tokens: number}>} */
+  const groups = new Map();
+  sessions.forEach((s) => {
+    const key = s.directory || '';
+    const row = groups.get(key) || { name: s.project || key || '—', sessions: 0, tokens: 0 };
+    row.sessions += 1;
+    row.tokens += s.usage?.total || 0;
+    groups.set(key, row);
+  });
+  return [...groups.values()]
+    .sort((a, b) => b.tokens - a.tokens)
+    .slice(0, 20)
+    .map(
+      (g) =>
+        '<div class="statusline"><span class="label">' +
+        esc(g.name) +
+        '</span><span class="num">' +
+        compact(g.tokens) +
+        ' · ' +
+        esc(t('sessions_short', { n: g.sessions })) +
+        '</span></div>',
+    )
+    .join('');
 }
 /** @returns {URLSearchParams} */
 function analyticsQuery() {
@@ -891,17 +1089,94 @@ async function loadAnalytics(seq = renderSeq) {
     const a = /** @type {Analytics} */ (await api('/api/analytics?' + analyticsQuery()));
     if (seq !== renderSeq || !$('analytics-results')) return;
     const max = Math.max(...a.activity.map((d) => d.total), 1);
+    const recorded = a.models
+      .filter((m) => m.recorded_cost != null)
+      .reduce((n, m) => n + (m.recorded_cost || 0), 0);
+    const estimated = a.models
+      .filter((m) => m.estimated_cost != null)
+      .reduce((n, m) => n + (m.estimated_cost || 0), 0);
+    const unknown = a.models.filter(
+      (m) => (m.usage?.total || 0) > 0 && m.recorded_cost == null && m.estimated_cost == null,
+    ).length;
+    const periodSessions = filteredPeriodSessions();
+    const seenDates = new Set(a.days.map((d) => d.date));
+    const unassigned = periodSessions
+      .filter((s) => !(s.files && s.files.length))
+      .reduce((n, s) => n + (s.usage?.total || 0), 0);
     $('analytics-results').innerHTML =
-      coverage() +
+      coverageNotice(a.coverage, SNAP?.coverage?.scope?.window_limit) +
       '<div class="notice info">' +
-      esc(a.methodology) +
-      '</div><div class="sectionhead"><h2>Zużycie w czasie <span>' +
+      esc(t('analytics.methodology')) +
+      '</div><div class="kpis analytics-kpis"><div class="kpi"><div class="kpi-top"><span class="label">' +
+      esc(t('analytics.summary.tokens')) +
+      '</span></div><div class="value" data-total="' +
+      a.tokens +
+      '">' +
       compact(a.tokens) +
-      ' tok · ' +
-      a.sessions +
-      ' sesji</span></h2></div><div class="panel">' +
-      chart(a.days) +
-      '</div><div class="sectionhead"><h2>Porównanie modeli</h2><span class="micro">Wyniki testów i review: deklaracje właściciela</span></div><div class="panel tablewrap"><table class="table"><thead><tr><th>Model / provider</th><th class="right">Tokeny</th><th class="right">Sesje</th><th class="right">Śr. tok / sesję</th><th class="right">Testy / próba</th><th class="right">Śr. poprawek</th><th class="right">Czas zadania</th><th class="right">Koszt zapisany</th><th class="right">Estymata</th></tr></thead><tbody>' +
+      '</div></div><div class="kpi"><div class="kpi-top"><span class="label">' +
+      esc(t('analytics.summary.sessions')) +
+      '</span></div><div class="value">' +
+      fmt(a.sessions) +
+      '</div></div><div class="kpi"><div class="kpi-top"><span class="label">' +
+      esc(t('analytics.summary.recorded')) +
+      '</span></div><div class="value">' +
+      money(recorded) +
+      '</div></div><div class="kpi"><div class="kpi-top"><span class="label">' +
+      esc(t('analytics.summary.estimated')) +
+      '</span></div><div class="value">' +
+      money(estimated) +
+      '</div></div></div>' +
+      (unknown
+        ? '<p class="note">' + esc(t('analytics.summary.unknown_cost', { n: unknown })) + '</p>'
+        : '') +
+      '<p class="note">' +
+      esc(t('analytics.currency_note')) +
+      '</p><div class="sectionhead"><h2>' +
+      esc(t('analytics.usage_time')) +
+      ' <span>' +
+      esc(
+        t('analytics.usage_window', {
+          tokens: compact(a.tokens),
+          sessions: t('sessions_short', { n: a.sessions }),
+        }),
+      ) +
+      '</span></h2><div class="view-controls"><button id="fold-reasoning" class="smallbtn' +
+      (reasoningFolded ? ' active' : '') +
+      '">' +
+      esc(t('analytics.toggle.reasoning')) +
+      '</button><button id="chart-absolute" class="smallbtn' +
+      (!percentMode ? ' active' : '') +
+      '">' +
+      esc(t('analytics.toggle.absolute')) +
+      '</button><button id="chart-percent" class="smallbtn' +
+      (percentMode ? ' active' : '') +
+      '">' +
+      esc(t('analytics.toggle.percent')) +
+      '</button></div></div><div class="panel">' +
+      (percentMode ? percentChart(a.days) : chart(a.days, reasoningFolded)) +
+      '</div><div class="sectionhead"><h2>' +
+      esc(t('analytics.models')) +
+      '</h2><span class="micro">' +
+      esc(t('analytics.owner_declarations')) +
+      '</span></div><div class="panel tablewrap"><table class="table"><thead><tr><th>' +
+      esc(t('analytics.table.model')) +
+      '</th><th class="right">' +
+      esc(t('analytics.table.tokens')) +
+      '</th><th class="right">' +
+      esc(t('analytics.table.sessions')) +
+      '</th><th class="right">' +
+      esc(t('analytics.table.avg')) +
+      '</th><th class="right">' +
+      esc(t('analytics.table.tests')) +
+      '</th><th class="right">' +
+      esc(t('analytics.table.fixes')) +
+      '</th><th class="right">' +
+      esc(t('analytics.table.duration')) +
+      '</th><th class="right">' +
+      esc(t('analytics.table.recorded')) +
+      '</th><th class="right">' +
+      esc(t('analytics.table.estimate')) +
+      '</th></tr></thead><tbody>' +
       a.models
         .map(
           (m) =>
@@ -910,8 +1185,8 @@ async function loadAnalytics(seq = renderSeq) {
             '</div><div class="under">' +
             esc(m.provider) +
             ' · ' +
-            m.assessed_tasks +
-            ' ocen</div></td><td class="right num">' +
+            esc(t('analytics.assessments', { n: m.assessed_tasks })) +
+            '</div></td><td class="right num">' +
             compact(m.usage.total) +
             '</td><td class="right num">' +
             fmt(m.sessions) +
@@ -933,23 +1208,36 @@ async function loadAnalytics(seq = renderSeq) {
         )
         .join('') +
       '</tbody></table>' +
-      (a.models.length
-        ? ''
-        : empty('Brak zużycia dla wybranych filtrów', 'Zmień okres albo dodaj źródło danych.')) +
+      (a.models.length ? '' : empty(t('analytics.empty.title'), t('analytics.empty.text'))) +
       '<p class="note" style="margin-top:15px">' +
-      esc(a.cost_note) +
-      ' W porównaniu nie ma fikcyjnych ocen jakości.</p></div><div class="grid2" style="margin-top:18px"><div class="panel"><h2>Aktywność · 52 tygodnie</h2><div class="heatmap">' +
+      esc(t('analytics.cost_note')) +
+      ' ' +
+      esc(t('analytics.cost_suffix')) +
+      '</p></div><div class="grid2" style="margin-top:18px"><div class="panel"><h2>' +
+      esc(t('analytics.activity_global')) +
+      '</h2><div class="heatmap">' +
       a.activity
-        .map(
-          (d) =>
+        .map((d) => {
+          const confirm = seenDates.has(d.date);
+          return (
             '<div class="heatcell l' +
             (d.total ? Math.max(1, Math.ceil((d.total / max) * 4)) : 0) +
+            (confirm ? '' : ' nodata') +
             '" title="' +
-            esc(d.date + ' · ' + fmt(d.total) + ' tokenów') +
-            '"></div>',
-        )
+            esc(
+              confirm
+                ? t('analytics.heat.tooltip', { date: d.date, n: fmt(d.total) })
+                : t('analytics.heat.nodata'),
+            ) +
+            '"></div>'
+          );
+        })
         .join('') +
-      '</div><p class="note">Intensywność z dostępnych rekordów źródłowych. Puste pole oznacza brak zarejestrowanych tokenów, nie udowodnioną bezczynność.</p></div><div class="panel"><h2>Pliki · przybliżony podział</h2>' +
+      '</div><p class="note">' +
+      esc(t('analytics.heat.note')) +
+      '</p></div><div class="panel"><h2>' +
+      esc(t('analytics.files')) +
+      '</h2>' +
       a.files
         .slice(0, 10)
         .map(
@@ -961,7 +1249,55 @@ async function loadAnalytics(seq = renderSeq) {
             '</span></div>',
         )
         .join('') +
-      '<p class="note" style="margin-top:12px">Równy podział tokenów sesji między odnotowane pliki. To estymata przypisania, nie zmierzony koszt konkretnej edycji.</p></div></div>' +
+      '<div class="statusline"><span class="label">' +
+      esc(t('analytics.files.unassigned')) +
+      '</span><span class="num">' +
+      compact(unassigned) +
+      '</span></div><p class="note" style="margin-top:12px">' +
+      esc(t('analytics.files.note')) +
+      '</p><p class="note">' +
+      esc(t('analytics.files.heuristic')) +
+      '</p></div></div><div class="sectionhead"><h2>' +
+      esc(t('analytics.sessions.heading')) +
+      '</h2><span class="micro">' +
+      esc(t('analytics.sessions.note')) +
+      '</span></div><div class="panel tablewrap"><table class="table"><thead><tr><th>' +
+      esc(t('table.agent')) +
+      '</th><th>' +
+      esc(t('table.model')) +
+      '</th><th>' +
+      esc(t('table.project')) +
+      '</th><th class="right">' +
+      esc(t('table.tokens')) +
+      '</th><th>' +
+      esc(t('table.activity')) +
+      '</th></tr></thead><tbody>' +
+      periodSessions
+        .slice(0, 25)
+        .map(
+          (s) =>
+            '<tr data-inspect="' +
+            esc(s.id) +
+            '" tabindex="0" role="button" data-tokens="' +
+            (s.usage?.total || 0) +
+            '"><td>' +
+            esc(s.agent) +
+            '</td><td>' +
+            esc(s.model) +
+            '</td><td>' +
+            esc(s.project) +
+            '</td><td class="right num">' +
+            compact(s.usage?.total || 0) +
+            '</td><td class="num">' +
+            esc(ago(s.updated)) +
+            '</td></tr>',
+        )
+        .join('') +
+      '</tbody></table></div><div class="sectionhead"><h2>' +
+      esc(t('analytics.projects.heading')) +
+      '</h2></div><div class="panel">' +
+      projectRows(periodSessions) +
+      '</div>' +
       routerPanel();
   } catch (e) {
     if ($('analytics-results'))
@@ -974,18 +1310,30 @@ function routerPanel() {
   if (!SNAP) return '';
   if (!SNAP.router.length) return '';
   return (
-    '<div class="sectionhead"><h2>Router · osobny rejestr</h2></div><div class="notice">Te żądania mogą pokrywać się z sesjami Codexa lub OpenCode. Nie dodajemy ich do łącznych tokenów. Rejestr pokazuje własne załadowane okno i nie stosuje filtrów projektu/grupy.</div>' +
+    '<div class="sectionhead"><h2>' +
+    esc(t('router.heading')) +
+    '</h2></div><div class="notice">' +
+    esc(t('router.notice')) +
+    '</div>' +
     SNAP.router
       .map(
         (r) =>
           '<div class="panel" style="margin-bottom:12px"><p class="note">' +
           esc(r.source) +
           '</p><div class="chips" style="margin:12px 0">' +
-          badge(r.requests + ' requests') +
-          badge(compact(r.tokens) + ' tokens') +
-          badge(r.errors + ' errors') +
-          badge(r.unknown_status + ' unknown status') +
-          '</div><div class="tablewrap"><table class="table"><thead><tr><th>Czas</th><th>Model</th><th>Status</th><th class="right">Tokeny</th></tr></thead><tbody>' +
+          badge(t('router.requests', { n: r.requests })) +
+          badge(t('router.tokens', { n: compact(r.tokens) })) +
+          badge(t('router.errors', { n: r.errors })) +
+          badge(t('router.unknown', { n: r.unknown_status })) +
+          '</div><div class="tablewrap"><table class="table"><thead><tr><th>' +
+          esc(t('router.table.time')) +
+          '</th><th>' +
+          esc(t('router.table.model')) +
+          '</th><th>' +
+          esc(t('router.table.status')) +
+          '</th><th class="right">' +
+          esc(t('router.table.tokens')) +
+          '</th></tr></thead><tbody>' +
           r.recent
             .slice(0, 12)
             .map(
@@ -1125,17 +1473,17 @@ function drawGraph(rows) {
           '\n' +
           s.state_evidence +
           (s.parent_id && !map.has(s.parent_id)
-            ? '\nRodzic poza widocznym zakresem: ' + s.parent_id
+            ? '\n' + t('graph.parent_outside', { id: s.parent_id })
             : ''),
       ) +
       '</title></g>';
   });
   layer.innerHTML = edges + nodes;
-  $('graph-count').textContent = shown.length + ' / ' + rows.length + ' sesji';
+  $('graph-count').textContent = t('graph.count', { shown: shown.length, total: rows.length });
   graphTransform();
   if (!rows.length) {
     layer.innerHTML =
-      '<text x="30" y="50" fill="var(--muted)" font-size="14">Brak sesji w tym widoku. Dodaj źródła lub wyczyść filtry.</text>';
+      '<text x="30" y="50" fill="var(--muted)" font-size="14">' + esc(t('graph.empty')) + '</text>';
   }
 }
 /** @returns {void} */
@@ -1198,8 +1546,9 @@ function bindGraph() {
 /** @param {string} id @returns {Promise<void>} */
 async function inspect(id) {
   const seq = ++inspectSeq;
-  $('inspector-title').textContent = 'Odczyt sesji…';
-  $('inspector-body').innerHTML = '<div class="loading">Odczyt danych źródłowych…</div>';
+  $('inspector-title').textContent = t('loading.inspect');
+  $('inspector-body').innerHTML =
+    '<div class="loading">' + esc(t('loading.inspect_body')) + '</div>';
   if (!$dialog('inspector').open) $dialog('inspector').showModal();
   try {
     const s = /** @type {SessionDetail} */ (
@@ -1221,34 +1570,44 @@ async function inspect(id) {
       esc(s.state_evidence) +
       '</div><dl class="details">' +
       [
-        ['Agent', s.agent],
-        ['Model', s.model],
-        ['Projekt', s.directory || 'nieustalony'],
-        ['Sesja', s.id],
-        ['Rodzic', s.parent_id || 'brak'],
-        ['Relacja', s.relationship],
-        ['Inicjator', s.origin + ' · ' + s.origin_evidence],
-        ['Utworzenie', date(s.created)],
-        ['Ostatni zapis', date(s.updated)],
+        [t('inspect.labels.agent'), s.agent],
+        [t('inspect.labels.model'), s.model],
+        [t('inspect.labels.project'), s.directory || t('inspect.value.unset')],
+        [t('inspect.labels.session'), s.id],
+        [t('inspect.labels.parent'), s.parent_id || t('inspect.value.none')],
+        [t('inspect.labels.relationship'), s.relationship],
+        [t('inspect.labels.origin'), s.origin + ' · ' + s.origin_evidence],
+        [t('inspect.labels.created'), date(s.created)],
+        [t('inspect.labels.updated'), date(s.updated)],
         [
-          'Kontekst',
+          t('inspect.labels.context'),
           s.context_tokens == null
-            ? 'nieznany'
+            ? t('inspect.value.unknown')
             : fmt(s.context_tokens) + ' / ' + fmt(s.context_limit),
         ],
       ]
         .map(([k, v]) => '<dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd>')
         .join('') +
-      '</dl><div class="btnrow"><button class="smallbtn" id="copy-session">Kopiuj ID</button><button class="smallbtn" data-project="' +
+      '</dl><div class="btnrow"><button class="smallbtn" id="copy-session">' +
+      esc(t('inspect.copy_id')) +
+      '</button><button class="smallbtn" data-project="' +
       esc(s.directory) +
-      '">Sesje projektu</button><button class="smallbtn" id="reload-session">Odśwież inspektor</button>' +
+      '">' +
+      esc(t('inspect.project_sessions')) +
+      '</button><button class="smallbtn" id="reload-session">' +
+      esc(t('inspect.reload')) +
+      '</button>' +
       (SNAP?.privacy.abort && s.source === 'opencode'
-        ? '<button class="smallbtn dangerbtn" id="abort-session">Przerwij sesję…</button>'
+        ? '<button class="smallbtn dangerbtn" id="abort-session">' +
+          esc(t('inspect.abort')) +
+          '</button>'
         : '') +
-      '</div><h3>Zużycie i kontekst</h3><div class="panel"><div class="splithead"><h2>' +
-      compact(u.total) +
-      ' tokenów</h2><span class="micro">' +
-      (s.usage_known ? 'odczyt źródła' : 'brak pomiaru') +
+      '</div><h3>' +
+      esc(t('inspect.usage')) +
+      '</h3><div class="panel"><div class="splithead"><h2>' +
+      esc(t('inspect.usage.tokens', { n: compact(u.total) })) +
+      '</h2><span class="micro">' +
+      (s.usage_known ? esc(t('inspect.usage.source')) : esc(t('inspect.usage.none'))) +
       '</span></div><div class="meter" style="margin:16px 0">' +
       keys.map((k) => '<span class="' + k + '" style="width:' + pct(k) + '%"></span>').join('') +
       '</div>' +
@@ -1262,25 +1621,27 @@ async function inspect(id) {
             '</span></div>',
         )
         .join('') +
-      '<p class="note" style="margin-top:12px">Input nie obejmuje tu cache. Reasoning jest wydzielone z outputu. Zachowujemy osobno sumę zgłoszoną przez źródło.</p></div>' +
+      '<p class="note" style="margin-top:12px">' +
+      esc(t('inspect.usage.note')) +
+      '</p></div>' +
       (s.warnings?.length
         ? '<div class="notice">' + s.warnings.map(esc).join('<br>') + '</div>'
         : '') +
-      '<h3>Zadanie / ostatni prompt</h3><pre class="codebox">' +
-      esc(
-        s.reported_task ||
-          s.prompt ||
-          'Brak zarejestrowanego promptu albo wyłączone udostępnianie treści.',
-      ) +
+      '<h3>' +
+      esc(t('inspect.task')) +
+      '</h3><pre class="codebox">' +
+      esc(s.reported_task || s.prompt || t('inspect.task.empty')) +
       '</pre>' +
       (s.definition
-        ? '<details class="toolrow"><summary>Definicja agenta · ' +
-          esc(s.definition.source) +
+        ? '<details class="toolrow"><summary>' +
+          esc(t('inspect.definition', { source: s.definition.source })) +
           '</summary><pre class="codebox">' +
           esc(s.definition.prompt || s.definition.description) +
           '</pre></details>'
         : '') +
-      '<h3>Ostatnie wywołania narzędzi</h3>' +
+      '<h3>' +
+      esc(t('inspect.tools')) +
+      '</h3>' +
       (s.tools.length
         ? s.tools
             .slice()
@@ -1301,20 +1662,54 @@ async function inspect(id) {
                 '</details>',
             )
             .join('')
-        : '<p class="note">Brak zapisanych wywołań w załadowanym zakresie.</p>') +
-      '<h3>Odnotowane pliki</h3><pre class="codebox">' +
-      esc(s.files.join('\n') || 'Brak odnotowanych edycji.') +
-      '</pre><h3>Ocena wykonania · dane właściciela</h3><div class="panel formgrid"><label>Grupa porównywalnych zadań<input id="assessment-group" value="' +
+        : '<p class="note">' + esc(t('inspect.tools.none')) + '</p>') +
+      '<h3>' +
+      esc(t('inspect.files')) +
+      '</h3><pre class="codebox">' +
+      esc(s.files.join('\n') || t('inspect.files.none')) +
+      '</pre><h3>' +
+      esc(t('inspect.assessment')) +
+      '</h3><div class="panel formgrid"><label>' +
+      esc(t('inspect.assessment.group')) +
+      '<input id="assessment-group" value="' +
       esc(a.task_group || s.task_group || '') +
-      '" placeholder="np. ui-regression-round-1"></label><label>Model oceniany<input id="assessment-model" value="' +
+      '" placeholder="' +
+      esc(t('inspect.assessment.group.placeholder')) +
+      '"></label><label>' +
+      esc(t('inspect.assessment.model')) +
+      '<input id="assessment-model" value="' +
       esc(a.model || s.model) +
-      '"></label><div class="formgrid two"><label>Testy<select id="assessment-tests"><option value="">Nie sprawdzono</option><option value="true">Przeszły</option><option value="false">Nie przeszły</option></select></label><label>Poprawki po review<input id="assessment-fixes" type="number" min="0" step="1" value="' +
+      '"></label><div class="formgrid two"><label>' +
+      esc(t('inspect.assessment.tests')) +
+      '<select id="assessment-tests"><option value="">' +
+      esc(t('inspect.assessment.tests.none')) +
+      '</option><option value="true">' +
+      esc(t('inspect.assessment.tests.pass')) +
+      '</option><option value="false">' +
+      esc(t('inspect.assessment.tests.fail')) +
+      '</option></select></label><label>' +
+      esc(t('inspect.assessment.fixes')) +
+      '<input id="assessment-fixes" type="number" min="0" step="1" value="' +
       esc(a.review_fixes ?? '') +
-      '" placeholder="nieznane"></label></div><label>Zmierzone wykonanie w sekundach<input id="assessment-duration" type="number" min="0" step="1" value="' +
+      '" placeholder="' +
+      esc(t('inspect.assessment.fixes.placeholder')) +
+      '"></label></div><label>' +
+      esc(t('inspect.assessment.duration')) +
+      '<input id="assessment-duration" type="number" min="0" step="1" value="' +
       esc(a.duration_seconds ?? '') +
-      '" placeholder="nie szacuj z czasu istnienia sesji"></label><label>Notatki<textarea id="assessment-notes" rows="3">' +
+      '" placeholder="' +
+      esc(t('inspect.assessment.duration.placeholder')) +
+      '"></label><label>' +
+      esc(t('inspect.assessment.notes')) +
+      '<textarea id="assessment-notes" rows="3">' +
       esc(a.notes || '') +
-      '</textarea></label><button class="primary" id="save-assessment">Zapisz ocenę</button><p class="note">Wynik przypisujesz do wybranego modelu. W sesji wielomodelowej oceniaj wyłącznie to, co faktycznie zweryfikowałeś.</p></div><h3>Historia sesji</h3>' +
+      '</textarea></label><button class="primary" id="save-assessment">' +
+      esc(t('inspect.assessment.save')) +
+      '</button><p class="note">' +
+      esc(t('inspect.assessment.note')) +
+      '</p></div><h3>' +
+      esc(t('inspect.history')) +
+      '</h3>' +
       eventList(
         (s.timeline || []).sort((a, b) => b.ts - a.ts),
         25,
@@ -1322,7 +1717,7 @@ async function inspect(id) {
     $select('assessment-tests').value = a.tests_passed == null ? '' : String(a.tests_passed);
   } catch (e) {
     if (seq !== inspectSeq) return;
-    $('inspector-title').textContent = 'Nie udało się odczytać sesji';
+    $('inspector-title').textContent = t('inspect.error.title');
     $('inspector-body').innerHTML = '<div class="notice danger">' + esc(errorText(e)) + '</div>';
   }
 }
@@ -1346,51 +1741,128 @@ async function integrations(seq) {
             '</span><span class="dot ' +
             (s.ok ? '' : 'off') +
             '"></span></div><div class="path">' +
-            esc(s.location || 'Nie wybrano źródła') +
+            esc(s.location || t('int.sources.none')) +
             '</div><p>' +
-            esc(s.error || s.note || (s.ok ? 'Odczyt aktywny' : 'Niepołączono')) +
+            esc(
+              s.error || s.note || (s.ok ? t('int.sources.active') : t('int.sources.disconnected')),
+            ) +
             '</p><div class="chips" style="margin-top:10px">' +
             (s.loaded_sessions != null
-              ? badge(s.loaded_sessions + ' / ' + s.total_sessions + ' sessions')
+              ? badge(
+                  t('int.sources.sessions', {
+                    loaded: fmt(s.loaded_sessions),
+                    total: fmt(s.total_sessions),
+                  }),
+                )
               : '') +
-            (s.loaded_files != null ? badge(s.loaded_files + ' logs') : '') +
-            (s.truncated ? badge('ograniczony zakres', 'waiting') : '') +
-            (s.skipped_records ? badge(s.skipped_records + ' skipped', 'waiting') : '') +
+            (s.loaded_files != null
+              ? badge(t('int.sources.logs', { n: fmt(s.loaded_files) }))
+              : '') +
+            (s.truncated ? badge(t('int.sources.truncated'), 'waiting') : '') +
+            (s.skipped_records
+              ? badge(t('int.sources.skipped', { n: fmt(s.skipped_records) }), 'waiting')
+              : '') +
             '</div></div>',
         )
         .join('') +
-      '</div><div class="sectionhead"><h2>Znajdź projekty i źródła</h2><span class="micro">Skan ograniczony do wybranych folderów</span></div><div class="panel"><div class="formgrid"><label>Foldery startowe · jeden na linię<textarea id="scan-roots" rows="2">' +
+      '</div><div class="sectionhead"><h2>' +
+      esc(t('int.sources.heading')) +
+      '</h2><span class="micro">' +
+      esc(t('int.sources.micro')) +
+      '</span></div><div class="panel"><div class="formgrid"><label>' +
+      esc(t('int.roots.label')) +
+      '<textarea id="scan-roots" rows="2">' +
       esc(cfg.scan_roots.join('\n')) +
-      '</textarea></label><div class="formrow"><label>Głębokość<select id="scan-depth"><option>3</option><option selected>5</option><option>8</option><option>10</option></select></label><button id="scan-start" class="primary">Skanuj wybrane foldery</button></div><p class="note">Szukamy znaczników Git, .opencode, opencode.db, .codex i usage-events.jsonl. Bez odczytu plików auth.json, .env i cudzych katalogów przez dowiązania. Limit: 6000 folderów lub 12 sekund. Skan niczego automatycznie nie dodaje.</p><div id="scan-status"></div><div id="scan-results" class="scanner-results"></div><button id="scan-adopt" hidden>Monitoruj zaznaczone wyniki</button></div></div><div class="sectionhead"><h2>Połączenie z istniejącym OpenCode</h2></div><div class="panel"><div class="formrow"><label>Adres lokalnego API<input id="oc-url" placeholder="http://127.0.0.1:4096"></label><button id="oc-add">Dodaj serwer</button></div><p class="note" style="margin-top:12px">Podaj adres już działającej instancji. Panel nie uruchamia osobnego OpenCode i nie skanuje portów. Losowy port aplikacji desktopowej trzeba wskazać. Hasło jest pobierane wyłącznie ze zmiennych OPENCODE_SERVER_PASSWORD / OPENCODE_SERVER_USERNAME procesu panelu.</p><pre class="codebox">' +
+      '</textarea></label><div class="formrow"><label>' +
+      esc(t('int.depth.label')) +
+      '<select id="scan-depth"><option>3</option><option selected>5</option><option>8</option><option>10</option></select></label><button id="scan-start" class="primary">' +
+      esc(t('int.scan.button')) +
+      '</button></div><p class="note">' +
+      esc(t('int.scan.note')) +
+      '</p><div id="scan-status"></div><div id="scan-results" class="scanner-results"></div><button id="scan-adopt" hidden>' +
+      esc(t('int.adopt.button')) +
+      '</button></div></div><div class="sectionhead"><h2>' +
+      esc(t('int.oc.heading')) +
+      '</h2></div><div class="panel"><div class="formrow"><label>' +
+      esc(t('int.oc.url.label')) +
+      '<input id="oc-url" placeholder="http://127.0.0.1:4096"></label><button id="oc-add">' +
+      esc(t('int.oc.add')) +
+      '</button></div><p class="note" style="margin-top:12px">' +
+      esc(t('int.oc.note')) +
+      '</p><pre class="codebox">' +
       esc(cfg.opencode_urls.join('\n')) +
-      '</pre></div><div class="sectionhead"><h2>MCP · Codex i ChatGPT</h2><span class="viewtag">' +
-      info.tools.length +
-      ' TOOLS</span></div><div class="grid2"><div class="panel"><h2>Codex · lokalnie</h2><p class="note">Wklej do konfiguracji MCP Codexa. Most stdio łączy się z tym uruchomionym panelem i sam odczytuje lokalny token. Nie tworzy drugiego obserwatora.</p><pre class="codebox" id="stdio-config">' +
+      '</pre></div><div class="sectionhead"><h2>' +
+      esc(t('int.mcp.heading')) +
+      '</h2><span class="viewtag">' +
+      esc(t('int.mcp.tools', { n: info.tools.length })) +
+      '</span></div><div class="grid2"><div class="panel"><h2>' +
+      esc(t('int.codex.title')) +
+      '</h2><p class="note">' +
+      esc(t('int.codex.note')) +
+      '</p><pre class="codebox" id="stdio-config">' +
       esc(info.stdio_toml) +
-      '</pre><button class="smallbtn" data-copy="stdio-config">Kopiuj konfigurację stdio</button><details class="secrets"><summary>Wariant HTTP z tokenem środowiskowym</summary><pre class="codebox" id="http-config">' +
+      '</pre><button class="smallbtn" data-copy="stdio-config">' +
+      esc(t('int.codex.copy')) +
+      '</button><details class="secrets"><summary>' +
+      esc(t('int.http.summary')) +
+      '</summary><pre class="codebox" id="http-config">' +
       esc(info.http_toml) +
-      '</pre><p class="note">Ustaw MISSION_CONTROL_MCP_TOKEN w środowisku procesu Codexa. Nie wklejaj tokenu do rozmowy.</p><input readonly type="password" value="' +
+      '</pre><p class="note">' +
+      esc(t('int.http.note')) +
+      '</p><input readonly type="password" value="' +
       esc('') +
-      '" id="mcp-token" aria-label="Token MCP"><button class="smallbtn" data-copy="mcp-token">Kopiuj token MCP</button></details></div><div class="panel"><h2>ChatGPT · HTTPS + OAuth</h2><div class="mcpstep"><span class="n">1</span><p>Skonfiguruj stały tunel HTTPS do portu ' +
-      esc(String(SNAP.port || 8765)) +
-      '. Tunel nie jest otwierany automatycznie.</p></div><div class="mcpstep"><span class="n">2</span><p>Ustaw publiczny adres i dokładny callback widoczny w konfiguracji połączenia ChatGPT.</p></div><div class="formgrid"><label>Publiczny adres HTTPS<input id="public-origin" placeholder="https://mc.twoja-domena.pl" value="' +
+      '" id="mcp-token" aria-label="' +
+      esc(t('int.mcp.token.aria')) +
+      '"><button class="smallbtn" data-copy="mcp-token">' +
+      esc(t('int.mcp.copy')) +
+      '</button></details></div><div class="panel"><h2>' +
+      esc(t('int.chatgpt.title')) +
+      '</h2><div class="mcpstep"><span class="n">1</span><p>' +
+      esc(t('int.step1', { port: fmt(SNAP.port || 8765) })) +
+      '</p></div><div class="mcpstep"><span class="n">2</span><p>' +
+      esc(t('int.step2')) +
+      '</p></div><div class="formgrid"><label>' +
+      esc(t('int.origin.label')) +
+      '<input id="public-origin" placeholder="' +
+      esc(t('int.origin.placeholder')) +
+      '" value="' +
       esc(cfg.public_origin) +
-      '"></label><label>Dozwolone callbacki OAuth · jeden na linię<textarea id="oauth-callbacks" rows="2">' +
+      '"></label><label>' +
+      esc(t('int.callbacks.label')) +
+      '<textarea id="oauth-callbacks" rows="2">' +
       esc(cfg.oauth_redirect_uris.join('\n')) +
-      '</textarea></label><button id="save-remote">Zapisz ustawienia zdalne</button></div><div class="mcpstep"><span class="n">3</span><p>Połącz ChatGPT z <code>' +
-      esc(info.remote_url || 'https://twój-host/mcp') +
-      '</code>, wybierz OAuth oraz dynamiczną rejestrację DCR. Pozostaw statyczne dane klienta puste.</p></div><details class="secrets"><summary>Klucz właściciela do formularza parowania</summary><p class="note">Wklej wyłącznie na stronie autoryzacji tego obserwatora. Nie wysyłaj w czacie ani do innego MCP.</p><input type="password" readonly value="' +
+      '</textarea></label><button id="save-remote">' +
+      esc(t('int.remote.save')) +
+      '</button></div><div class="mcpstep"><span class="n">3</span><p>' +
+      t('int.step3.html', { url: esc(info.remote_url || 'https://your-host.example/mcp') }) +
+      '</p></div><details class="secrets"><summary>' +
+      esc(t('int.pairing.summary')) +
+      '</summary><p class="note">' +
+      esc(t('int.pairing.note')) +
+      '</p><input type="password" readonly value="' +
       esc('') +
-      '" id="pairing-key" aria-label="Klucz parowania"><button class="smallbtn" data-copy="pairing-key">Kopiuj klucz</button></details><button class="smallbtn dangerbtn" id="revoke-oauth">Unieważnij zdalne tokeny OAuth</button></div></div><div class="notice">MCP nie daje automatycznie dostępu do wszystkich rozmów ChatGPT. Zobaczysz tylko wywołania tego mostu oraz jawnie przesłane raporty. Lokalny log Codexa nie obejmuje automatycznie sesji działających wyłącznie w chmurze.</div><div class="panel"><h2>Raportowanie pochodzenia zadania</h2><label class="togglelabel"><input id="reporting-toggle" type="checkbox" ' +
+      '" id="pairing-key" aria-label="' +
+      esc(t('int.pairing.aria')) +
+      '"><button class="smallbtn" data-copy="pairing-key">' +
+      esc(t('int.pairing.copy')) +
+      '</button></details><button class="smallbtn dangerbtn" id="revoke-oauth">' +
+      esc(t('int.revoke')) +
+      '</button></div></div><div class="notice">' +
+      esc(t('int.notice')) +
+      '</div><div class="panel"><h2>' +
+      esc(t('int.reporting.title')) +
+      '</h2><label class="togglelabel"><input id="reporting-toggle" type="checkbox" ' +
       (cfg.enable_reporting ? 'checked' : '') +
-      '> Udostępnij narzędzie report_event (zapis tylko w obserwatorze)</label><pre class="codebox" id="report-example">' +
+      '> ' +
+      esc(t('int.reporting.toggle')) +
+      '</label><pre class="codebox" id="report-example">' +
       esc(
         JSON.stringify(
           {
-            event_id: 'unikalny-identyfikator-zdarzenia',
+            event_id: t('int.reporting.example.event_id'),
             source: 'chatgpt',
             session_id: 'opencode:ses_TUTAJ_PRAWDZIWE_ID',
-            task: 'Sprawdzenie regresji UI',
+            task: t('int.reporting.example.task'),
             task_group: 'dashboard-ui-round-1',
             state: 'running',
           },
@@ -1398,7 +1870,11 @@ async function integrations(seq) {
           2,
         ),
       ) +
-      '</pre><p class="note">Powiąż raport z prawdziwym canonical session_id z list_agents. Raport nie zastępuje stanu API, nie nalicza tokenów i nie uruchamia pracy. Zmiana narzędzi wymaga odświeżenia ich listy po stronie klienta.</p></div><div class="sectionhead"><h2>Klienci tego mostu</h2></div><div class="panel">' +
+      '</pre><p class="note">' +
+      esc(t('int.reporting.note')) +
+      '</p></div><div class="sectionhead"><h2>' +
+      esc(t('int.clients.heading')) +
+      '</h2></div><div class="panel">' +
       (SNAP.mcp_clients?.length
         ? SNAP.mcp_clients
             .map(
@@ -1406,14 +1882,16 @@ async function integrations(seq) {
                 '<div class="statusline"><span class="label">' +
                 esc(c.name) +
                 '</span><span class="num">' +
-                fmt(c.calls) +
-                ' calls</span><span class="small">' +
+                esc(t('int.clients.calls', { n: fmt(c.calls) })) +
+                '</span><span class="small">' +
                 esc(ago(c.last_seen)) +
                 '</span></div>',
             )
             .join('')
-        : '<p class="note">Żaden klient nie zainicjował jeszcze tego mostu. Nazwy klientów pochodzą z ich deklaracji.</p>') +
-      '</div><div class="sectionhead"><h2>Definicje agentów <span>' +
+        : '<p class="note">' + esc(t('int.clients.none')) + '</p>') +
+      '</div><div class="sectionhead"><h2>' +
+      esc(t('int.definitions.heading')) +
+      ' <span>' +
       SNAP.definitions.length +
       '</span></h2></div><div class="panel">' +
       (SNAP.definitions.length
@@ -1436,8 +1914,10 @@ async function integrations(seq) {
                 '</div></div>',
             )
             .join('')
-        : '<p class="note">Definicje zostaną odczytane z API albo globalnych i projektowych folderów agent/agents.</p>') +
-      '</div><details class="panel" style="margin-top:18px"><summary>Uwagi integracyjne i ograniczenia</summary><pre class="codebox">' +
+        : '<p class="note">' + esc(t('int.definitions.none')) + '</p>') +
+      '</div><details class="panel" style="margin-top:18px"><summary>' +
+      esc(t('int.instructions.summary')) +
+      '</summary><pre class="codebox">' +
       esc(info.instructions) +
       '</pre></details>';
     await scanProgress();
@@ -1452,9 +1932,51 @@ async function settings(seq) {
     CONFIG = /** @type {DashboardConfig} */ (await api('/api/config'));
     if (seq !== renderSeq) return;
     $('view').innerHTML =
-      '<div class="grid2"><div class="panel"><h2>Konfiguracja</h2><p class="note">Zmiany są sprawdzane i zapisywane atomowo. Ceny w pricing podajesz jako USD za milion tokenów; brak ceny nie oznacza zera. Możesz wykluczyć projekt przez excluded_projects.</p><textarea id="config-editor" class="codeedit" spellcheck="false" aria-label="Konfiguracja JSON">' +
+      '<div class="grid2"><div class="panel"><h2>' +
+      esc(t('set.config.title')) +
+      '</h2><p class="note">' +
+      esc(t('set.config.note')) +
+      '</p><textarea id="config-editor" class="codeedit" spellcheck="false" aria-label="' +
+      esc(t('set.config.aria')) +
+      '">' +
       esc(JSON.stringify(CONFIG, null, 2)) +
-      '</textarea><div class="btnrow"><button class="primary" id="config-save">Sprawdź i zapisz</button><button id="config-reload">Wczytaj ponownie</button></div><div id="config-status" class="note"></div></div><div class="panel"><h2>Najważniejsze reguły</h2><dl class="details"><dt>show_prompts</dt><dd>Wyłącza prompt i treść definicji. Wyniki narzędzi nadal mogą zawierać poufne dane.</dd><dt>enable_reporting</dt><dd>Włącza report_event; domyślnie wyłączone.</dd><dt>allow_abort</dt><dd>Włącza przycisk przerwania tylko dla właściciela, z wpisaniem ID. MCP nie może przerwać agenta.</dd><dt>expected_models</dt><dd>Mapa nazwa agenta / ID sesji → dokładny ID modelu. Niezgodność generuje alert, nie automatyczną zmianę.</dd><dt>allowed_paths</dt><dd>Mapa nazwa agenta → lista dozwolonych folderów edycji.</dd><dt>stall_seconds</dt><dd>Próg braku nowych dowodów aktywności, a nie automatyczny wyrok o awarii.</dd><dt>token_budget</dt><dd>Limit informacyjny na sesję. 0 wyłącza alert.</dd><dt>history_limit</dt><dd>Liczba ostatnio aktualizowanych sesji z każdej bazy. Zakres nie jest całą historią, jeśli limit zostanie osiągnięty.</dd><dt>codex_file_limit</dt><dd>Liczba najnowszych lokalnych logów Codexa.</dd><dt>history_days</dt><dd>Retencja własnej historii obserwatora. Źródła nie są usuwane.</dd></dl><div class="notice">Panel nie instaluje aktualizacji, nie odpala workerów, nie przełącza płatnych modeli i nie modyfikuje źródłowych baz.</div><p class="note">Własne pliki aplikacji: config.json, observer.sqlite, owner.token, mcp.token, pairing.key i mission-control.log. Trzy pliki kluczy są poufne.</p><div class="sectionhead"><h2>Zakończ pracę panelu</h2></div><p class="note">Zamknięcie karty nie wyłącza obserwatora. Ten przycisk zatrzymuje wyłącznie panel i jego most MCP, bez zatrzymywania agentów.</p><button class="dangerbtn" id="stop-observer">Zatrzymaj obserwator</button></div></div>';
+      '</textarea><div class="btnrow"><button class="primary" id="config-save">' +
+      esc(t('set.save')) +
+      '</button><button id="config-reload">' +
+      esc(t('set.reload')) +
+      '</button></div><div id="config-status" class="note"></div></div><div class="panel"><h2>' +
+      esc(t('set.rules.title')) +
+      '</h2><dl class="details"><dt>show_prompts</dt><dd>' +
+      esc(t('set.rule.show_prompts')) +
+      '</dd><dt>enable_reporting</dt><dd>' +
+      esc(t('set.rule.enable_reporting')) +
+      '</dd><dt>allow_abort</dt><dd>' +
+      esc(t('set.rule.allow_abort')) +
+      '</dd><dt>expected_models</dt><dd>' +
+      esc(t('set.rule.expected_models')) +
+      '</dd><dt>allowed_paths</dt><dd>' +
+      esc(t('set.rule.allowed_paths')) +
+      '</dd><dt>stall_seconds</dt><dd>' +
+      esc(t('set.rule.stall_seconds')) +
+      '</dd><dt>token_budget</dt><dd>' +
+      esc(t('set.rule.token_budget')) +
+      '</dd><dt>history_limit</dt><dd>' +
+      esc(t('set.rule.history_limit')) +
+      '</dd><dt>codex_file_limit</dt><dd>' +
+      esc(t('set.rule.codex_file_limit')) +
+      '</dd><dt>history_days</dt><dd>' +
+      esc(t('set.rule.history_days')) +
+      '</dd></dl><div class="notice">' +
+      esc(t('set.notice')) +
+      '</div><p class="note">' +
+      esc(t('set.files.note')) +
+      '</p><div class="sectionhead"><h2>' +
+      esc(t('set.stop.title')) +
+      '</h2></div><p class="note">' +
+      esc(t('set.stop.note')) +
+      '</p><button class="dangerbtn" id="stop-observer">' +
+      esc(t('set.stop.button')) +
+      '</button></div></div>';
   } catch (e) {
     if (seq === renderSeq)
       $('view').innerHTML = '<div class="notice danger">' + esc(errorText(e)) + '</div>';
@@ -1468,13 +1990,12 @@ async function scanProgress() {
     scanSnapshot = s;
     $button('scan-start').disabled = s.running;
     $('scan-status').textContent = s.running
-      ? 'Skanowanie wybranych folderów…'
+      ? t('scan.running')
       : s.scanned_dirs != null
-        ? s.scanned_dirs +
-          ' folderów · ' +
-          s.items.length +
-          ' wyników' +
-          (s.truncated ? ' · limit osiągnięty; zawęź folder lub skanuj kolejny zakres' : '')
+        ? t('scan.status', {
+            dirs: t('scan.folders', { n: fmt(s.scanned_dirs) }),
+            items: t('scan.results', { n: fmt(s.items.length) }),
+          }) + (s.truncated ? t('scan.limit') : '')
         : '';
     if (!s.running) {
       $('scan-results').innerHTML =
@@ -1509,10 +2030,10 @@ async function copyText(id) {
       : el.textContent || '';
   try {
     await navigator.clipboard.writeText(text);
-    toast('Skopiowano.');
+    toast(t('copy.done'));
   } catch (_) {
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) el.select();
-    toast('Schowek niedostępny. Zaznacz i skopiuj tekst ręcznie.', true);
+    toast(t('copy.unavailable'), true);
   }
 }
 /** @param {boolean} [force] @returns {Promise<void>} */
@@ -1530,19 +2051,23 @@ async function load(force = false) {
     $('login-error').textContent = '';
     const fresh = snap.generated_at && Date.now() - snap.generated_at < 45000;
     $('connection').textContent = snap.generated_at
-      ? (fresh ? 'Odczyt ' : 'Dane wymagają odświeżenia · ') + ago(snap.generated_at)
-      : 'Pierwszy odczyt źródeł…';
+      ? fresh
+        ? t('conn.read', { ago: ago(snap.generated_at) })
+        : t('conn.stale', { ago: ago(snap.generated_at) })
+      : t('conn.first');
     $('status-dot').className = 'dot ' + (fresh ? 'pulse' : 'off');
     $('side-dot').className = 'dot ' + (fresh ? '' : 'off');
-    $('side-state').textContent = fresh ? 'Obserwator działa' : 'Oczekiwanie na dane';
+    $('side-state').textContent = fresh ? t('side.running') : t('side.waiting');
     $('nav-projects').textContent = String(snap.projects.length);
     $('nav-agents').textContent = String(snap.sessions.length);
-    $('nav-agents').title = 'Sesje w załadowanym oknie; aktywność jest liczona osobno';
+    $('nav-agents').title = t('nav.agents.title');
     $('nav-alerts').textContent = String(snap.alerts.filter((a) => !a.acknowledged).length);
     const select = $select('project-filter'),
       value = select.value;
     const options =
-      '<option value="">Wszystkie projekty</option>' +
+      '<option value="">' +
+      esc(t('filters.project.all')) +
+      '</option>' +
       snap.projects
         .map((p) => '<option value="' + esc(p.path) + '">' + esc(p.name) + '</option>')
         .join('');
@@ -1572,10 +2097,10 @@ async function load(force = false) {
     else if (view === 'analytics' && !document.activeElement?.closest('.formrow'))
       await render(false);
   } catch (e) {
-    $('connection').textContent = 'Brak połączenia · ' + errorText(e);
+    $('connection').textContent = t('conn.error', { error: errorText(e) });
     $('status-dot').className = 'dot off';
     $('side-dot').className = 'dot off';
-    $('side-state').textContent = 'Połączenie niedostępne';
+    $('side-state').textContent = t('side.offline');
     if (!SNAP) $('view').innerHTML = '<div class="notice danger">' + esc(errorText(e)) + '</div>';
     if (force) toast(errorText(e), true);
   } finally {
@@ -1600,28 +2125,32 @@ $button('theme').addEventListener('click', () => {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem('mc-theme', theme);
 });
+$button('lang').addEventListener('click', () => {
+  const lang = setLanguage(nextLanguage());
+  writePreference('mc-lang', lang);
+  syncLang();
+  applyStatic(document);
+  head();
+  if (SNAP) void render(false);
+});
 $button('notify').addEventListener('click', async () => {
   if (!('Notification' in window)) {
-    toast('Ta przeglądarka nie obsługuje powiadomień.', true);
+    toast(t('toast.notify.unsupported'), true);
     return;
   }
   if (localStorage.getItem('mc-notify') === '1') {
     localStorage.setItem('mc-notify', '0');
-    toast('Powiadomienia wyłączone.');
+    toast(t('toast.notify.off'));
     return;
   }
   const p = await Notification.requestPermission();
   localStorage.setItem('mc-notify', p === 'granted' ? '1' : '0');
-  toast(
-    p === 'granted'
-      ? 'Powiadomienia nowych alertów włączone.'
-      : 'Powiadomienia nie zostały udostępnione.',
-  );
+  toast(p === 'granted' ? t('toast.notify.on') : t('toast.notify.denied'));
 });
 $button('refresh').addEventListener('click', async () => {
   try {
     await api('/api/refresh', {});
-    toast('Zażądano nowego odczytu źródeł.');
+    toast(t('toast.refresh'));
     await load(true);
   } catch (e) {
     toast(errorText(e), true);
@@ -1707,7 +2236,7 @@ document.addEventListener('click', async (e) => {
     if (b.dataset.ack) {
       await api('/api/ack', { ids: [b.dataset.ack] });
       if (b instanceof HTMLButtonElement) b.disabled = true;
-      toast('Przyjęto alert do wiadomości.');
+      toast(t('toast.ack'));
       setTimeout(() => load(true), 600);
       return;
     }
@@ -1718,7 +2247,7 @@ document.addEventListener('click', async (e) => {
       const res = await fetch('/api/export?' + q, {
         headers: { Authorization: 'Bearer ' + token },
       });
-      if (!res.ok) throw new Error('Eksport nie powiódł się.');
+      if (!res.ok) throw new Error(t('error.export'));
       const blob = await res.blob(),
         url = URL.createObjectURL(blob),
         a = document.createElement('a');
@@ -1741,10 +2270,22 @@ document.addEventListener('click', async (e) => {
         taskGroup = $input('task-group').value.trim();
         await loadAnalytics();
         break;
+      case 'fold-reasoning':
+        reasoningFolded = !reasoningFolded;
+        await loadAnalytics();
+        break;
+      case 'chart-absolute':
+        percentMode = false;
+        await loadAnalytics();
+        break;
+      case 'chart-percent':
+        percentMode = true;
+        await loadAnalytics();
+        break;
       case 'copy-session':
         if (!DETAIL) break;
         await navigator.clipboard.writeText(DETAIL.id);
-        toast('Skopiowano ID sesji.');
+        toast(t('inspect.copied'));
         break;
       case 'reload-session':
         if (!DETAIL) break;
@@ -1766,26 +2307,24 @@ document.addEventListener('click', async (e) => {
             notes: $textarea('assessment-notes').value,
           },
         });
-        toast('Zapisano ocenę właściciela.');
+        toast(t('toast.assessment'));
         break;
       }
       case 'abort-session': {
         if (!DETAIL) break;
-        const confirmText = prompt(
-          'To zatrzyma rzeczywistą sesję OpenCode. Wpisz dokładnie ID:\n' + DETAIL.native_id,
-        );
+        const confirmText = prompt(t('inspect.abort.prompt', { native: DETAIL.native_id }));
         if (confirmText !== DETAIL.native_id) {
-          toast('Nie przerwano sesji.');
+          toast(t('inspect.abort.cancelled'));
           break;
         }
         await api('/api/abort', { session_id: DETAIL.id, confirm: confirmText });
-        toast('Wysłano żądanie przerwania. Sprawdź nowy stan źródła.');
+        toast(t('inspect.abort.sent'));
         break;
       }
       case 'ack-all':
         if (!SNAP) break;
         await api('/api/ack', { ids: SNAP.alerts.filter((a) => !a.acknowledged).map((a) => a.id) });
-        toast('Przyjęto widoczne alerty.');
+        toast(t('toast.ack_all'));
         setTimeout(() => load(true), 700);
         break;
       case 'scan-start': {
@@ -1804,7 +2343,7 @@ document.addEventListener('click', async (e) => {
           (el) => snap.items[Number(el.dataset.scanIndex)],
         );
         await api('/api/adopt', { selected });
-        toast('Dodano ' + selected.length + ' źródeł/projektów do monitorowania.');
+        toast(t('int.adopt.toast', { n: fmt(selected.length) }));
         break;
       }
       case 'oc-add': {
@@ -1813,7 +2352,7 @@ document.addEventListener('click', async (e) => {
         const cfg = /** @type {DashboardConfig} */ (await api('/api/config'));
         if (!cfg.opencode_urls.includes(url)) cfg.opencode_urls.push(url);
         await api('/api/config', cfg);
-        toast('Zapisano adres istniejącego OpenCode.');
+        toast(t('toast.oc.added'));
         await load(true);
         break;
       }
@@ -1825,37 +2364,30 @@ document.addEventListener('click', async (e) => {
           .map((x) => x.trim())
           .filter(Boolean);
         await api('/api/config', cfg);
-        toast('Zapisano ustawienia OAuth. Tunel HTTPS wymaga osobnej konfiguracji.');
+        toast(t('toast.remote.saved'));
         await load(true);
         break;
       }
       case 'revoke-oauth':
-        if (
-          confirm(
-            'Unieważnić wszystkie zdalne tokeny OAuth? Klienci będą musieli połączyć się ponownie.',
-          )
-        ) {
+        if (confirm(t('confirm.revoke'))) {
           await api('/api/revoke', {});
-          toast('Zdalne tokeny zostały unieważnione.');
+          toast(t('toast.revoked'));
         }
         break;
       case 'config-save': {
         const cfg = JSON.parse($textarea('config-editor').value);
         await api('/api/config', cfg);
-        $('config-status').textContent =
-          'Zapisano. Nowe ustawienia zostaną zastosowane w kolejnym odczycie.';
-        toast('Konfiguracja przeszła walidację.');
+        $('config-status').textContent = t('set.saved');
+        toast(t('set.valid'));
         break;
       }
       case 'config-reload':
         await settings(renderSeq);
         break;
       case 'stop-observer':
-        if (
-          confirm('Zatrzymać tylko ten obserwator? Agenci OpenCode i Codex będą nadal działać.')
-        ) {
+        if (confirm(t('set.confirm.stop'))) {
           await api('/api/shutdown', { confirm: 'STOP OBSERVER' });
-          toast('Obserwator zatrzymywany. Ponowne uruchomienie: launcher lub plik Python.');
+          toast(t('toast.shutdown'));
         }
         break;
     }
@@ -1871,11 +2403,7 @@ document.addEventListener('change', async (e) => {
       const cfg = /** @type {DashboardConfig} */ (await api('/api/config'));
       cfg.enable_reporting = target.checked;
       await api('/api/config', cfg);
-      toast(
-        cfg.enable_reporting
-          ? 'Raportowanie włączone. Odśwież listę narzędzi w klientach MCP.'
-          : 'Raportowanie wyłączone.',
-      );
+      toast(cfg.enable_reporting ? t('toast.reporting.on') : t('toast.reporting.off'));
     } catch (ex) {
       toast(errorText(ex), true);
       target.checked = !target.checked;
@@ -1914,7 +2442,7 @@ setInterval(() => {
     if (main) main.inert = expanded;
     scrim.hidden = !expanded;
     toggle.setAttribute('aria-expanded', String(expanded));
-    toggle.setAttribute('aria-label', expanded ? 'Zamknij nawigację' : 'Otwórz nawigację');
+    toggle.setAttribute('aria-label', expanded ? t('topbar.menu.close') : t('topbar.menu.open'));
     document.body.classList.toggle('nav-open', expanded);
     if (expanded) {
       const target = sidebar.querySelector('.nav button.active') || sidebar.querySelector('button');
@@ -1980,11 +2508,10 @@ setInterval(() => {
     section.className = 'panel';
     section.setAttribute('data-reveal-panel', '1');
     const title = document.createElement('h2');
-    title.textContent = 'Sekrety i tokeny';
+    title.textContent = t('reveal.title');
     const note = document.createElement('p');
     note.className = 'muted';
-    note.textContent =
-      'Wartości są pokazywane dopiero po kliknięciu i traktowane jak hasła. Nigdy nie udostępniaj ich niezaufanym narzędziom.';
+    note.textContent = t('reveal.note');
     const list = document.createElement('div');
     list.style.display = 'grid';
     list.style.gap = '.5rem';
@@ -2001,7 +2528,7 @@ setInterval(() => {
       const button = document.createElement('button');
       button.type = 'button';
       button.setAttribute('data-reveal', name);
-      button.textContent = 'Pokaż';
+      button.textContent = t('reveal.show');
       const output = document.createElement('output');
       output.setAttribute('data-reveal-out', name);
       output.style.fontFamily = 'ui-monospace, monospace';
@@ -2038,7 +2565,7 @@ setInterval(() => {
       const value = result.value || '';
       if (output) output.textContent = value;
       syncField(name, value);
-      toast('Ujawniono ' + name + '. Ukryj lub skopiuj ręcznie.');
+      toast(t('toast.reveal', { name }));
     } catch (error) {
       toast(errorText(error), true);
     } finally {

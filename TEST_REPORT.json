@@ -1,79 +1,119 @@
 {
-  "version": "5.0.0",
-  "verified_date": "2026-09-16",
+  "version": "6.0.0",
+  "verified_date": "2026-09-17",
   "environment": {
     "os": "Windows",
     "python": "3.14.3",
     "node": "24.14.0",
-    "note": "Run in the repository checkout via scripts/run_tests.py, opencode_dashboard.py --self-test and npx playwright test. Synthetic temporary fixtures only."
+    "note": "All checks run locally with synthetic fixtures only; no user source database, live session or credential is read by the suite. Linux coverage is owned by CI."
   },
   "regression_tests": {
-    "run": 144,
-    "passed": 142,
+    "run": 190,
+    "passed": 188,
     "failures": 0,
     "errors": 0,
     "skipped": 2,
     "skip_reasons": [
-      "Symlink creation unavailable in this environment (scan traversal test).",
-      "POSIX file-mode assertion; Windows uses account ACLs (secret permissions test)."
+      "test_scan_no_symlink_traversal: creating symlinks is unavailable in this environment.",
+      "test_restricted_secret_permissions: POSIX file-mode assertion; Windows uses account ACLs."
     ],
     "resource_warnings": 0,
-    "seconds": 37.4,
-    "data": "Synthetic temporary databases, logs, HTTP endpoints and OAuth clients only."
+    "seconds": 55.0,
+    "data": "synthetic fixtures in temporary directories"
   },
   "built_in_self_tests": {
     "passed": 10,
     "run": 10
   },
   "lint": {
-    "tool": "ruff 0.16.8 (repo pyproject config)",
+    "tool": "ruff 0.16.8 (repository pyproject configuration)",
     "passed": true,
-    "errors": 0,
-    "details": "ruff check . is clean."
+    "errors": 0
+  },
+  "frontend_strict_check": {
+    "status": "passed",
+    "details": "eslint, strict typecheck (tsc), prettier format:check, i18n check (en 454 keys = pl 454 keys), reproducible esbuild bundle of index.html/app.js/style.css"
+  },
+  "browser_checks": {
+    "status": "passed",
+    "passed": 38,
+    "run": 38,
+    "target": "production dist served by the real observer with manifest verification",
+    "coverage": "desktop and mobile; navigation, graph, inspector, timeline pagination, settings persistence, integrations, error states, structured completeness notices, usage report periods/toggles/consistency/exports, English and Polish (default English)"
+  },
+  "mcp_checks": {
+    "status": "passed",
+    "passed": 10,
+    "run": 10,
+    "coverage": "protocol negotiation, stable read tools with conditional report_event, strict validation, resources, limits, coverage consistency, token privilege boundaries, no secrets in responses or logs, stdio bridge clean from a foreign working directory with a spaced state path"
+  },
+  "migration_checks": {
+    "status": "passed",
+    "passed": 8,
+    "run": 8,
+    "coverage": "fresh install, v5 state migrated with backup and preserved rows/settings/assessments/secrets, current V6 untouched, repeated open idempotent, interrupted and write-error rollback with retry, newer schema refused, CLI migrate and running-observer refusal"
   },
   "synthetic_benchmark": {
-    "script": "scripts/benchmark.py",
-    "phase": "post-fix (bounded soft deadline + partial coverage)",
-    "default_100k_events": {
+    "script": "scripts/benchmark_incremental.py",
+    "method": "docs/V6_BENCHMARKS.md",
+    "run_100k": {
       "sessions": 1000,
-      "fixture_mb": 24.8,
-      "parse_cold_seconds": 1.39,
-      "poll_cold_seconds": 8.91,
-      "analytics_cold_seconds": 0.024,
-      "analytics_warm_seconds": 0.003,
-      "coverage": "1000/1000 sessions, 98000 parts, truncated=false"
+      "events": 100000,
+      "parts": 98000,
+      "expected_total_tokens": 12347213,
+      "received_total_tokens": 12347213,
+      "cycles_to_full_coverage": 1,
+      "full_coverage_seconds": 10.56,
+      "metadata_available_ms": 10510.2,
+      "first_overview_while_importing_ms": 20.4,
+      "analytics_cold_seconds": 0.033,
+      "analytics_warm_seconds": 0.001,
+      "tracemalloc_peak_bytes": 90318555,
+      "windows_working_set_bytes": null,
+      "aggregates_complete": "1000/1000",
+      "details_truncated": false
     },
-    "stress_1m_events": {
-      "result": "Cold poll 12.627 s; 96 of 1000 sessions published; deadline_exceeded=true, truncated=true; source marked partial.",
-      "previous": "Before the fix the query guard tripped (OperationalError: interrupted) and 0 sessions were published.",
-      "accepted_limit": "A full cold read of 1000 sessions would take ~100 s+ and defeat the 10 s soft budget; the bounded, explicitly-marked window is accepted.",
-      "reproduction": "python -X utf8 scripts/benchmark.py --events 1000000",
-      "owner": "Fixed by DS-2; evidence in artifacts/team/ds2/benchmark-*-after.json."
+    "run_1m": {
+      "sessions": 1000,
+      "events": 1002000,
+      "parts": 1000000,
+      "expected_total_tokens": 126001216,
+      "received_total_tokens": 126001216,
+      "cycles_to_full_coverage": 7,
+      "full_coverage_seconds": 126.946,
+      "metadata_available_ms": 18490.9,
+      "first_overview_while_importing_ms": 23.1,
+      "analytics_cold_seconds": 0.027,
+      "analytics_warm_seconds": 0.002,
+      "tracemalloc_peak_bytes": 242816596,
+      "windows_working_set_bytes": null,
+      "aggregates_complete": "1000/1000",
+      "loaded_sessions_detail_window": "148 of 1000; aggregates stay complete, limited details are reported explicitly"
     },
-    "results": "docs/benchmarks/result-win-py314-after.json, docs/benchmarks/result-win-py314-1m-after.json (pre-fix files kept for comparison)",
-    "method": "docs/benchmarks/README.md"
+    "restart_mid_import": {
+      "first_cycle_complete": false,
+      "first_cycle_total": 87317016,
+      "resumed_cycles": 1,
+      "final_total": 126001216,
+      "expected_total_tokens": 126001216,
+      "sums_match": true,
+      "no_double_count": true
+    },
+    "restart_after_full_import": "identical totals for both sizes; 12,347,213 and 126,001,216 unchanged",
+    "memory_method": "tracemalloc peak = Python allocations in bytes; Windows working set via GetProcessMemoryInfo (null when unavailable). tracemalloc is not process RSS.",
+    "baseline_comparison": "Etap C reported 9.5 s / 1 cycle (100k) and 103.6 s / 6 cycles (1M). This run measured 10.56 s / 1 cycle and 126.95 s / 7 cycles with exact sums and lossless restarts; the difference is consistent with added coverage bookkeeping and machine load and is reported as this run's real measurement."
   },
   "ci": {
     "workflow": ".github/workflows/ci.yml",
-    "status": "not yet run on GitHub",
-    "matrix": "windows-latest/ubuntu-latest x Python 3.10/3.14 (verify job), windows-latest/ubuntu-latest Node 22 with required Playwright (browser job)",
-    "browser_evidence": "synthetic fixture data only (playwright-report + test-results); .fixture-info.json never uploaded"
-  },
-  "browser_checks": {
-    "status": "27/27 pass locally (desktop + mobile) via npx playwright test; covers navigation, graph, inspector, pagination, settings save, integrations, error states, incomplete-coverage marking and mobile.",
-    "passed": 27,
-    "run": 27
-  },
-  "frontend_strict_check": {
-    "status": "npm run lint, npm run typecheck (strict), npm run format:check and npm run build (reproducible) all pass, re-verified locally 2026-09-16.",
-    "owner": "DS-1"
+    "status": "green for the final V6 commit (matrix windows-latest and ubuntu-latest with Python 3.10 and 3.14; browser job on Node 22 on both systems with mandatory browser tests on the production dist)",
+    "browser_evidence": "synthetic only (playwright-report and test-results; .fixture-info.json is never uploaded)"
   },
   "limitations": [
-    "No access to the user OpenCode database or live sessions in these tests.",
-    "No end-to-end login to the user ChatGPT or Codex account.",
-    "No Linux execution in this report; Linux coverage is CI-owned and pending.",
-    "OAuth is a single-owner local implementation, not an independently audited identity product.",
-    "Benchmarks are single-machine synthetic figures with observed run-to-run variance, not guarantees.",
-    "A 1 M-event fixture does not load the full 1000-session history within the read budget; the partial window is explicitly reported, not hidden."
+    "The test suite never reads the user's OpenCode database, Codex logs or live sessions; only synthetic fixtures are used.",
+    "No real ChatGPT or Codex client login was performed; connecting a real client is an external acceptance step (checklist in the Integrations screen and docs/V6_HANDOFF.md).",
+    "Linux behaviour is covered by CI, not by the local Windows run.",
+    "The single-owner OAuth server is a local implementation and has not been independently audited.",
+    "Synthetic benchmark numbers vary with machine load; expected sums come from the generator, never from a recorded result.",
+    "At 1M events only 148 of 1000 sessions have full details inside the bounded window while the usage aggregates remain complete; this is reported explicitly in coverage, not hidden."
   ]
 }

@@ -6,7 +6,7 @@ test('search with no matches shows the empty state', async ({ page }) => {
   await login(page);
   await goView(page, 'agents');
   await page.locator('#search').fill('zzz-no-such-fixture');
-  await expect(page.locator('#view .empty')).toContainText('Brak sesji');
+  await expect(page.locator('#view .empty')).toContainText('No sessions');
   await page.locator('#reset-filters').click();
   await expect(page.locator('#view table.table')).toBeVisible();
   expectQuiet(watch);

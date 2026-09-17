@@ -1,4 +1,4 @@
-# OpenCode Mission Control v5
+# OpenCode Mission Control v6
 
 Local observer dashboard for OpenCode, Codex logs, projects, agents,
 models, history and MCP. One owner, one machine: it reads your local
@@ -6,25 +6,27 @@ sources read-only and presents activity, analytics, alerts and
 integrations in a browser panel. It does not run agents, send commands
 to them, or modify your repositories.
 
-> Status: v5 hardening in progress on branch
-> `fix/mission-control-v5-hardening-ui` (Python hardening, strict
-> frontend types/build, browser tests, delivery tooling). Anything below
-> marked *pending* is not yet landed; nothing here claims an unrun
-> check passed.
+> Status: v6 (6.0.0) is implemented and verified in an isolated worktree
+> on branch `feat/mission-control-v6` (data-completeness contract, EN/PL
+> localization, usage report, production bundle serving, versioned state
+> migration, MCP/security checks). A running v5 instance and its data are
+> not modified. Nothing here claims an unrun check passed.
 
-## Package layout (v5, not the old single file)
+## Package layout
 
 ```text
 opencode_dashboard.py      Thin launcher / compatibility API (imports mission_control)
 mission_control/           Backend package: cli, core, engine, locking,
-                           mcp, oauth, server, sources, store
-web/                       Frontend sources (index.html, app.js, style.css)
+                           mcp, migration, oauth, server, sources, store
+web/                       Frontend sources (index.html, app.js, style.css, i18n/)
+web/dist/                  Built production bundle (served by default, manifest sha256)
 scripts/build.mjs          Frontend bundle step (npm run build)
 test_mission_control.py    Offline regression suite (root)
 tests/                     Additional hardening suites
 scripts/run_tests.py       Offline unittest runner (honest exit code)
 scripts/smoke_startup.py   Real-dashboard smoke test on a loopback port
 scripts/benchmark.py       Synthetic large-data benchmark (stdlib only)
+scripts/benchmark_incremental.py  Incremental-import benchmark (synthetic 100k / 1M)
 docs/benchmarks/           Sanitized benchmark results + method notes
 .github/workflows/ci.yml   Windows + Linux CI (Python 3.10/3.14, Node 22)
 ```
@@ -37,9 +39,53 @@ command-line surface (`--db`, `--port`, `--self-test`, …).
 Frontend sources live in `web/` and are bundled via `npm run build`
 (esbuild → `web/dist/app.js` + `style.css` + `manifest.json` with
 input/output hashes). Requirements: Node **≥ 22.13** and a clean
-`npm ci` from the committed lockfile. The Python server serves the
-`web/` sources directly; the bundle step is still required (and CI
-runs it) to prove the shippable assets build reproducibly.
+`npm ci` from the committed lockfile. By default the server serves the
+built `web/dist` bundle and verifies it against the manifest sha256; if
+the bundle is missing it shows a readable "build required" page instead
+of a silent fallback to sources. `--dev-web` serves the `web/` sources
+directly for development; `npm run check` (lint, strict types, prettier,
+i18n key check, reproducible build) is the frontend gate.
+
+## What's new in V6 (6.0.0)
+
+- Data completeness: one coverage contract shared by the UI, JSON/CSV
+  exports and MCP. Metadata is available immediately; aggregates are
+  complete for the loaded window while detailed rows stay in a bounded
+  window that is reported explicitly (`details_truncated`), never
+  silently zeroed. CSV exports carry an `X-Mission-Control-Coverage`
+  header. Details: `docs/V6_COVERAGE.md`.
+- Languages: full English/Polish dictionaries (454 keys each), English
+  default, topbar switch persisted across reloads and preserving the
+  current filters, view and inspector state.
+- Usage report: Today / 7 / 30 / 90 days / last year / all periods from
+  the shared aggregates, with recorded vs estimated vs unknown cost,
+  sessions and projects panels, and a files view whose equal-allocation
+  heuristic is marked as such (unattributed rows stay `Unassigned`).
+- Production serving: `web/dist` with manifest sha256 verification (see
+  above); `--dev-web` for sources.
+- MCP: setup flows in the sections below are unchanged (local stdio
+  config from the Integrations view, ChatGPT via OAuth with
+  `public_origin` and the exact callback URL); v6 adds protocol checks
+  for both supported MCP versions, stable read tools, conditional
+  `report_event` and stricter validation.
+- State migration: `python -X utf8 opencode_dashboard.py --migrate-state --state-dir <dir>`
+  upgrades a v5 state directory in one transaction (exit 0/1/2) and
+  keeps a pre-migration SQLite backup
+  (`observer.sqlite.pre-migration-v1-to-v2-<timestamp>`); newer schemas
+  are refused. Details: `docs/V6_MIGRATION.md`.
+- Token rotation: `python -X utf8 opencode_dashboard.py --rotate-owner-token --state-dir <dir>`
+  atomically replaces only `owner.token`; database, config, `mcp.token`
+  and `pairing.key` are preserved. Run it with the observer stopped;
+  the restart invalidates issued OAuth access tokens.
+- Benchmark numbers: `docs/V6_BENCHMARKS.md`; implementation status:
+  `docs/V6_STATUS.md` and `docs/V6_HANDOFF.md`.
+
+To try v6 next to an existing instance without touching it, use a
+separate port and state directory:
+
+```powershell
+py -3 opencode_dashboard.py --open --port 8780 --state-dir ".\state-v6"
+```
 
 ## Quick start (Windows)
 
@@ -71,9 +117,8 @@ Linux works the same with `python3`:
 python3 opencode_dashboard.py --open --port 8765
 ```
 
-Verified so far on Windows / Python 3.14.3 (see `TEST_REPORT.json`);
-Linux CI runs the same suite on every push (`.github/workflows/ci.yml`,
-pending first green run).
+Verified on Windows / Python 3.14.3 for 6.0.0 (see `TEST_REPORT.json`);
+Linux CI runs the same suite on every push (`.github/workflows/ci.yml`).
 
 ## Connecting your existing OpenCode
 

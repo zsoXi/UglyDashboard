@@ -67,6 +67,13 @@ from .engine import (
     normalize_report,
 )
 from .mcp import MCP, RPCError
+from .migration import (
+    CONFIG_VERSION,
+    SCHEMA_VERSION,
+    MigrationError,
+    migrate_config,
+    migrate_store,
+)
 from .oauth import OAuth
 from .server import (
     CSS,
@@ -101,6 +108,7 @@ from .store import SecretError, Store
 __all__ = [
     "ACTIVE",
     "APP",
+    "CONFIG_VERSION",
     "CSS",
     "Diagnostics",
     "Engine",
@@ -121,6 +129,7 @@ __all__ = [
     "MAX_RESPONSE",
     "MAX_SESSION_USAGE_EVENTS",
     "MCP",
+    "MigrationError",
     "NoRedirect",
     "OAUTH_PAGE",
     "OAuth",
@@ -129,6 +138,7 @@ __all__ = [
     "PAGE",
     "REVEALABLE_SECRETS",
     "RPCError",
+    "SCHEMA_VERSION",
     "SECRET_RE",
     "STATES",
     "STATE_DEFAULT",
@@ -164,6 +174,8 @@ __all__ = [
     "local_json",
     "main",
     "make_session",
+    "migrate_config",
+    "migrate_store",
     "normalize_report",
     "now_ms",
     "number",

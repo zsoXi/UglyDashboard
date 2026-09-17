@@ -211,6 +211,72 @@ def builtin_self_test():
     return 0 if result.wasSuccessful() else 1
 
 
+def rotate_owner_token(directory):
+    """Rotate only the owner credential in a state dir (no server is started)."""
+    from .store import Store
+
+    with Store(directory) as store:
+        store.rotate_secret("owner.token")
+        location = str(store.directory)
+    print(
+        "Owner token rotated in "
+        + location
+        + ". The previous token stops working once a dashboard is restarted; "
+        "start it with --open to receive the new one. The database, "
+        "configuration, mcp.token and pairing.key were not modified."
+    )
+    return 0
+
+
+def _observer_running(state):
+    """True only when a healthy observer still answers on the recorded port."""
+    try:
+        runtime = json.loads((state / "runtime.json").read_text("utf-8"))
+        port = int(runtime["port"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    try:
+        health = local_json(f"http://127.0.0.1:{port}/health", timeout=1)
+    except Exception:
+        return False
+    return health.get("application") == "opencode-mission-control"
+
+
+def migrate_state(directory):
+    """Migrate only the private observer state directory and exit.
+
+    Never touches OpenCode or Codex source databases and never rotates a
+    credential. A running observer is refused because it holds the state open.
+    """
+    from .migration import SCHEMA_VERSION, MigrationError
+    from .store import Store
+
+    state = Path(directory).expanduser().resolve()
+    if _observer_running(state):
+        print(
+            "An observer instance is still answering on the recorded port. "
+            "Stop it before migrating its state directory."
+        )
+        return 2
+    try:
+        with Store(directory) as store:
+            report = store.migration
+    except MigrationError as ex:
+        print("Migration refused: " + str(ex))
+        return 1
+    if report.get("migrated"):
+        print(
+            f"Observer state migrated to schema v{report['version']} "
+            f"(was v{report['from_version']}). "
+            f"Backup: {report['backup'] or 'none needed (no existing rows)'}. "
+            "Database, settings and credentials were preserved; usage aggregates "
+            "are rebuilt incrementally by the next reads."
+        )
+    else:
+        print(f"Observer state is already at schema v{SCHEMA_VERSION}. Nothing to do.")
+    return 0
+
+
 def _reusable_instance(port, token):
     """True only for a healthy Mission Control app that accepts our owner token."""
     try:
@@ -288,6 +354,12 @@ def main():
         help="Optional shutdown after N seconds without requests. Default 0 keeps observer running.",
     )
     parser.add_argument(
+        "--dev-web",
+        action="store_true",
+        help="Serve the unbuilt web/ sources instead of the production dist bundle "
+        "(development only).",
+    )
+    parser.add_argument(
         "--mcp-stdio",
         action="store_true",
         help="Bridge stdio MCP to an already-running dashboard. Stdout is JSON-RPC only.",
@@ -302,10 +374,26 @@ def main():
         action="store_true",
         help="Run built-in offline sanity tests without reading user data.",
     )
+    parser.add_argument(
+        "--rotate-owner-token",
+        action="store_true",
+        help="Rotate only the owner token in the state dir and exit. The database, "
+        "configuration, mcp.token and pairing.key are preserved.",
+    )
+    parser.add_argument(
+        "--migrate-state",
+        action="store_true",
+        help="Migrate the observer state directory to the current schema and exit. "
+        "Never touches OpenCode or Codex source databases.",
+    )
     parser.add_argument("--version", action="version", version=VERSION)
     args = parser.parse_args()
     if args.self_test:
         return builtin_self_test()
+    if args.rotate_owner_token:
+        return rotate_owner_token(args.state_dir)
+    if args.migrate_state:
+        return migrate_state(args.state_dir)
     if args.mcp_stdio:
         return stdio_bridge(args.state_dir)
     if args.report_event:
@@ -337,7 +425,7 @@ def main():
     LOG.setLevel(logging.INFO)
     should_open = not args.no_open and (args.open or len(sys.argv) == 1)
     try:
-        server = Server(("127.0.0.1", args.port), engine)
+        server = Server(("127.0.0.1", args.port), engine, dev_web=args.dev_web)
     except OSError as ex:
         # 1) A healthy instance of this exact app that accepts our OWNER token
         #    and actually renders the dashboard shell can be reused. Never send
@@ -352,7 +440,7 @@ def main():
         server = None
         for candidate in range(args.port + 1, min(args.port + 51, 65536)):
             try:
-                server = Server(("127.0.0.1", candidate), engine)
+                server = Server(("127.0.0.1", candidate), engine, dev_web=args.dev_web)
                 LOG.warning("Port %s is in use; started on %s instead.", args.port, candidate)
                 if not args.quiet and sys.stdout:
                     print(f"Port {args.port} is in use; using {candidate} instead.")

@@ -113,6 +113,7 @@ def read_opencode(path, limit=1000, budget_seconds=None):
                 raise
 
         processed = 0
+        processed_ids = set()
         for s in list(sessions.values()):
             # A non-positive budget must deterministically stop after the newest
             # session: comparing monotonic() > deadline is unreliable on coarse
@@ -196,10 +197,15 @@ def read_opencode(path, limit=1000, budget_seconds=None):
                         f"SELECT * FROM part WHERE session_id=? ORDER BY {po} DESC LIMIT ?",
                         (s["native_id"], budget + 1),
                     )
+                older_cursor = None
                 if len(rows_p) > budget:
                     truncated = True
                     s["parts_truncated"] = True
                     rows_p = rows_p[:budget]
+                    if rows_p:
+                        older_cursor = (
+                            (rows_p[-1][po], rows_p[-1]["id"]) if has_part_id else len(rows_p)
+                        )
                 parts_total += len(rows_p)
                 for r in reversed(rows_p):
                     r = dict(r)
@@ -257,19 +263,84 @@ def read_opencode(path, limit=1000, budget_seconds=None):
                     elif typ == "retry":
                         s["retry_count"] += 1
                         add_event(s, "retry", str(d.get("error", "Retry")), ts, pid)
+                if older_cursor is not None:
+                    # Usage aggregates must not depend on the detail window: page
+                    # through the older parts with a usage-only read (no detail is
+                    # retained) so the session totals include every step-finish, not
+                    # only the newest MAX_OC_PARTS_PER_SESSION of them. Memory stays
+                    # bounded by the page size; the soft deadline bounds the work and
+                    # any remainder is reported as aggregate_truncated.
+                    cursor = older_cursor
+                    while True:
+                        if read_state["hit"] or time.monotonic() > deadline:
+                            s["_aggregate_truncated"] = True
+                            if read_state["hit"]:
+                                deadline_exceeded = True
+                            break
+                        if has_part_id:
+                            q = (
+                                f"SELECT * FROM part WHERE session_id=? AND "
+                                f"({po} < ? OR ({po} = ? AND id < ?)) "
+                                f"ORDER BY {po} DESC, id DESC LIMIT ?"
+                            )
+                            args = (
+                                s["native_id"],
+                                cursor[0],
+                                cursor[0],
+                                cursor[1],
+                                MAX_OC_PART_PAGE,
+                            )
+                        else:
+                            q = (
+                                f"SELECT * FROM part WHERE session_id=? "
+                                f"ORDER BY {po} DESC LIMIT ? OFFSET ?"
+                            )
+                            args = (s["native_id"], MAX_OC_PART_PAGE, cursor)
+                        page_rows = fetch(q, args)
+                        if not page_rows:
+                            break
+                        for raw in page_rows:
+                            r = dict(raw)
+                            d = obj(r.get("data"))
+                            if d.get("type") == "step-finish" and d.get("tokens"):
+                                ts = int(
+                                    number(
+                                        r.get("time_created")
+                                        or obj(d.get("time")).get("start")
+                                    )
+                                )
+                                mid = message_info.get(r.get("message_id"), {})
+                                record_usage(
+                                    s,
+                                    oc_usage(d["tokens"], diag),
+                                    ts,
+                                    mid.get("modelID"),
+                                    mid.get("providerID"),
+                                    d.get("cost"),
+                                )
+                        if len(page_rows) < MAX_OC_PART_PAGE:
+                            break
+                        if has_part_id:
+                            last = page_rows[-1]
+                            cursor = (last[po], last["id"])
+                        else:
+                            cursor += len(page_rows)
             if read_state["hit"]:
                 deadline_exceeded = True
                 break
+            processed_ids.add(s["native_id"])
             processed += 1
-        if deadline_exceeded:
-            # Keep only the newest fully-read sessions. Anything after the break
-            # was never detailed and would otherwise publish as empty ghosts.
-            sessions = {s["native_id"]: s for s in list(sessions.values())[:processed]}
         for s in sessions.values():
-            if not s["usage_known"]:
+            if s["native_id"] not in processed_ids:
+                # Not detailed within this cycle's budget: publish metadata only
+                # and let the durable usage checkpoints complete the aggregate
+                # incrementally, so no session silently disappears.
+                s["_pending_detail"] = True
+                s["warnings"].append("Usage is still being aggregated from history.")
+            if not s["usage_known"] and not s.get("_pending_detail"):
                 for t, ts, model, prov, cost in s.get("_message_usage", []):
                     record_usage(s, oc_usage(t, diag), ts, model, prov, cost)
-            if not s["usage_known"]:
+            if not s["usage_known"] and not s.get("_pending_detail"):
                 r = s["_rollup"]
                 if any(k in r for k in ("tokens_input", "tokens_output")):
                     u = {
@@ -302,8 +373,12 @@ def read_opencode(path, limit=1000, budget_seconds=None):
             s["events"] = s["events"][-120:]
             if s.get("parts_truncated"):
                 s["warnings"].append(
-                    "Part history capped at %d newest parts; usage may be incomplete."
-                    % MAX_OC_PARTS_PER_SESSION
+                    "Part detail history capped at %d newest parts; usage totals still "
+                    "include the older parts." % MAX_OC_PARTS_PER_SESSION
+                )
+            if s.get("_aggregate_truncated"):
+                s["warnings"].append(
+                    "Usage aggregate stopped at the read budget; older usage is still pending."
                 )
             if s.get("messages_truncated"):
                 s["warnings"].append(
@@ -314,17 +389,21 @@ def read_opencode(path, limit=1000, budget_seconds=None):
     truncated_sessions = sum(
         1 for s in result if s.get("parts_truncated") or s.get("messages_truncated")
     )
+    aggregate_truncated = sum(1 for s in result if s.get("_aggregate_truncated"))
     coverage = {
         "total_sessions": total,
-        "loaded_sessions": len(result),
+        "metadata_sessions": len(result),
+        "loaded_sessions": len(processed_ids),
         "parts_loaded": parts_total,
         "truncated_sessions": truncated_sessions,
+        "aggregate_truncated_sessions": aggregate_truncated,
         "deadline_exceeded": deadline_exceeded,
         "truncated": bool(
             total > limit
             or truncated
             or parts_total >= MAX_OC_PARTS_TOTAL
             or deadline_exceeded
+            or aggregate_truncated
         ),
         "rejected_records": diag.snapshot(),
     }
@@ -506,6 +585,9 @@ class JsonlReader:
     """Incremental complete-line reader. Handles append, rotation, truncation,
     same-size rewrites, split UTF-8, and long lines without unbounded allocation.
     Complete records are delivered once per file version; partial tails wait.
+    ``resolved`` is the position after the last fully resolved line, so a
+    restarted reader can resume there and re-read an unfinished tail instead of
+    losing it.
     """
 
     def __init__(self):
@@ -517,6 +599,8 @@ class JsonlReader:
         self.skipped = 0
         self.reset = False
         self.anchor = b""
+        self.resolved = 0
+        self.pending_start = 0
 
     def read(self, path, budget=16 * 1024 * 1024):
         st = Path(path).stat()
@@ -541,6 +625,8 @@ class JsonlReader:
             self.pending = b""
             self.discarding = False
             self.skipped = 0
+            self.resolved = 0
+            self.pending_start = 0
         self.identity, self.mtime = identity, st.st_mtime_ns
         records = []
         with open(path, "rb") as f:
@@ -551,22 +637,36 @@ class JsonlReader:
                 if not chunk:
                     break
                 consumed += len(chunk)
+                base = self.offset
                 self.offset += len(chunk)
                 pieces = chunk.split(b"\n")
+                pos = base
                 for i, piece in enumerate(pieces):
                     end = i < len(pieces) - 1
+                    line_end = pos + len(piece) + 1
                     if self.discarding:
                         if end:
                             self.discarding = False
+                            self.resolved = line_end
+                        pos += len(piece) + (1 if end else 0)
                         continue
+                    if not self.pending:
+                        # Position where the unfinished line starts; the safe
+                        # resume point if the line is never completed.
+                        self.pending_start = pos
                     self.pending += piece
                     if len(self.pending) > MAX_LINE:
                         self.pending = b""
                         self.skipped += 1
-                        self.discarding = not end
+                        if end:
+                            self.resolved = line_end
+                        else:
+                            self.discarding = True
                     elif end:
                         raw = self.pending
                         self.pending = b""
+                        # Only a line that reached its newline is resolved.
+                        self.resolved = line_end
                         try:
                             value = json.loads(raw, parse_constant=reject_json_constant)
                             if isinstance(value, dict):
@@ -574,6 +674,7 @@ class JsonlReader:
                         except (UnicodeDecodeError, ValueError):
                             if raw.strip():
                                 self.skipped += 1
+                    pos += len(piece) + (1 if end else 0)
         with open(path, "rb") as check:
             check.seek(max(0, self.offset - 128))
             self.anchor = check.read(min(128, self.offset))
@@ -793,6 +894,20 @@ def discover_codex_files(homes, limit):
         "files_found": len(candidates),
         "loaded_files": min(len(candidates), limit),
         "truncated": truncated or len(candidates) > limit,
+    }
+
+
+def discover_all_codex_files(homes):
+    """Every discovered Codex log, newest first.
+
+    Same walk and safety caps as `discover_codex_files`, but without the
+    per-cycle file window: the caller decides how many files to process in a
+    single cycle and must be able to reach all of them across cycles.
+    """
+    files, coverage = discover_codex_files(homes, 10**9)
+    return files, {
+        "files_found": coverage["files_found"],
+        "truncated": coverage["truncated"],
     }
 
 

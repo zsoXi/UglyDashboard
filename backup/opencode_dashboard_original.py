@@ -323,7 +323,7 @@ def collect_repo_commits(worktrees, per_repo=MAX_COMMITS_PER_REPO):
     return commits
 
 
-AGENT_DIRS = [r"D:\TESTY!\.opencode\agent"]
+AGENT_DIRS = [r"C:\Path\To\Project\.opencode\agent"]
 BUILTIN_AGENTS = [
     {"name": "build", "mode": "primary", "model": "", "description": "Default coding agent", "source": "builtin"},
     {"name": "plan", "mode": "primary", "model": "", "description": "Planning mode agent", "source": "builtin"},

@@ -33,15 +33,18 @@ from .core import (
     path_key,
     path_name,
     public_copy,
+    readonly_db,
     redact,
     stamp,
     validate_config,
     zero_usage,
 )
+from .incremental import AGGREGATE_BUDGET_SECONDS, aggregate_source
+from .migration import migrate_config
 from .sources import (
     JsonlReader,
     codex_apply,
-    discover_codex_files,
+    discover_all_codex_files,
     enrich_oc_session,
     git_info,
     local_json,
@@ -258,6 +261,7 @@ def build_fact(s):
         "daily": {d: dict(u) for d, u in daily.items()},
         "daily_models": {d: {k: dict(v) for k, v in m.items()} for d, m in daily_models.items()},
         "usage_events_dropped": s.get("usage_events_dropped", 0),
+        "session_flags": session_flags(s),
     }
 
 
@@ -272,12 +276,262 @@ def build_facts(rows):
     return [build_fact(s) for s in rows]
 
 
-def compute_analytics(facts, cutoff, cfg, days, project, task_group, source):
+def codex_session_payload(s):
+    """JSON-safe snapshot of a fully processed Codex session for a checkpoint.
+
+    Stored with the per-file read checkpoint so a restarted observer can
+    republish every accounted session from durable state instead of re-reading
+    unchanged logs. The activity timeline (``events``) is not part of any
+    snapshot surface and is skipped; usage events are kept so coverage flags and
+    analytics stay identical to the pre-restart state.
+    """
+    return {
+        k: copy.deepcopy(v)
+        for k, v in s.items()
+        if (k == "_cumulative" or not k.startswith("_")) and k != "events"
+    }
+
+
+READER_VERSION = 2
+
+
+def _restore_codex_item(path, saved):
+    """Rebuild a cached Codex item from a durable checkpoint.
+
+    Returns ``None`` when the checkpoint does not carry a usable session
+    payload (an older state, or a file that never finished a read), in which
+    case the file is read again instead of publishing invented totals. When
+    the checkpoint also carries the reader position, the restored reader
+    continues from there so an appended file applies only its new records;
+    checkpoints without a position fall back to a full read (the reader
+    detects the missing identity and resets).
+    """
+    payload = saved.get("session") if isinstance(saved, dict) else None
+    if not isinstance(payload, dict) or not payload.get("usage"):
+        return None
+    s = make_session("codex", Path(path).stem)
+    for key, value in payload.items():
+        s[key] = copy.deepcopy(value)
+    s["usage_known"] = bool(s.get("usage_known") or s["usage"].get("total"))
+    reader = JsonlReader()
+    # Only a checkpoint written by the safe reader format may resume from an
+    # offset: earlier states stored a mid-line position whose unfinished tail
+    # was never persisted, so those files are read again from the start.
+    offset = saved.get("offset")
+    if saved.get("reader_version") == READER_VERSION and isinstance(offset, int) and offset > 0:
+        reader.offset = offset
+        reader.resolved = offset
+        identity = saved.get("identity")
+        if isinstance(identity, (list, tuple)) and len(identity) == 2:
+            reader.identity = (identity[0], identity[1])
+        mtime_ns = saved.get("mtime_ns")
+        if isinstance(mtime_ns, int):
+            reader.mtime = mtime_ns
+    return {"reader": reader, "session": s}
+
+
+COVERAGE_COMPLETE = "complete"
+COVERAGE_PARTIAL = "partial"
+COVERAGE_UNKNOWN = "unknown"
+
+# Which session source each coverage-relevant kind of source feeds.
+SESSION_SOURCE_KINDS = {"opencode": "database", "codex": "codex"}
+
+
+def session_flags(s):
+    """Exact per-session completeness facts shared by every coverage surface.
+
+    ``ledger`` compares the kept usage-event ledger with the session total,
+    ``daily``/``model`` are only complete when that ledger covers the full
+    total, ``file`` records whether the detail window kept the whole history,
+    ``detail_pending`` marks sessions whose detail may still change and
+    ``aggregate`` marks usage aggregates that are still catching up. A complete
+    overall total never inflates a partial breakdown on its own.
+    """
+    usage = s.get("usage") or {}
+    total = int(number(usage.get("total")))
+    events = s.get("usage_events") or []
+    dropped = int(s.get("usage_events_dropped") or 0)
+    ledger_total = sum(int(number(e.get("total"))) for e in events)
+    ledger_ok = dropped == 0 and ledger_total == total
+    daily_ok = ledger_ok and all(day(e.get("ts")) for e in events)
+    model_total = sum(
+        int(number((m.get("usage") or {}).get("total")))
+        for m in (s.get("model_usage") or {}).values()
+    )
+    model_ok = ledger_ok and model_total == total
+    detail_pending = bool(
+        s.get("parts_truncated")
+        or s.get("messages_truncated")
+        or s.get("_aggregate_truncated")
+        or s.get("_pending_detail")
+    )
+    return {
+        "ledger": ledger_ok,
+        "daily": daily_ok,
+        "model": model_ok,
+        "file": not detail_pending,
+        "evicted": dropped,
+        "detail_pending": detail_pending,
+        "aggregate": bool(s.get("_aggregate_complete", True)),
+    }
+
+
+def _flag_status(flags, key):
+    if not flags:
+        return COVERAGE_UNKNOWN
+    return COVERAGE_COMPLETE if all(f[key] for f in flags) else COVERAGE_PARTIAL
+
+
+def _conclude(values):
+    """True only when every source explicitly reports True, None when unknown."""
+    if not values:
+        return None
+    if any(v is False for v in values):
+        return False
+    if any(v is None for v in values):
+        return None
+    return True
+
+
+def coverage_breakdowns(flags):
+    return {
+        "daily": _flag_status(flags, "daily"),
+        "model": _flag_status(flags, "model"),
+        "file": _flag_status(flags, "file"),
+    }
+
+
+def coverage_breakdown_details(flags):
+    return {
+        "sessions_scored": len(flags),
+        "daily_partial_sessions": sum(1 for f in flags if not f["daily"]),
+        "model_partial_sessions": sum(1 for f in flags if not f["model"]),
+        "file_partial_sessions": sum(1 for f in flags if not f["file"]),
+    }
+
+
+def _coverage_details(flags):
+    return {
+        "details_truncated": any(f["detail_pending"] for f in flags),
+        "detail_events_evicted": sum(f["evicted"] for f in flags),
+    }
+
+
+def assemble_coverage(flags, sources, scope):
+    """One coverage block shared by the snapshot, analytics, exports and MCP.
+
+    Source-wide fields (metadata, aggregates, discovery counts, freshness)
+    describe the loaded source window; breakdowns and detail fields are scored
+    on the exact session flags they receive, so a complete total never implies
+    a complete per-day, per-model or per-file split.
+    """
+    session_sources = [
+        s
+        for s in sources
+        if s.get("kind") in ("database", "codex") and s.get("scoped") is not False
+    ]
+    discovered = [
+        s.get("discovered_sessions")
+        for s in session_sources
+        if s.get("discovered_sessions") is not None
+    ]
+    processed = [
+        s.get("processed_sessions")
+        for s in session_sources
+        if s.get("processed_sessions") is not None
+    ]
+    reads = [
+        s.get("last_successful_read_at")
+        for s in session_sources
+        if s.get("last_successful_read_at")
+    ]
+    metadata_complete = _conclude([s.get("metadata_complete") for s in session_sources])
+    details = _coverage_details(flags)
+    return {
+        "scope": dict(scope),
+        "metadata_complete": metadata_complete,
+        "aggregates_complete": _conclude(
+            [s.get("aggregates_complete") for s in session_sources]
+        ),
+        "history_limited": metadata_complete is False,
+        "breakdowns": coverage_breakdowns(flags),
+        "breakdown_details": coverage_breakdown_details(flags),
+        "details_truncated": details["details_truncated"],
+        "detail_events_evicted": details["detail_events_evicted"],
+        "catching_up": bool(
+            any(s.get("catching_up") for s in sources)
+            or any(not f["aggregate"] for f in flags)
+        ),
+        "source_stale": any(s.get("stale") for s in sources),
+        "read_blocked": any(s.get("read_blocked") for s in sources),
+        "discovered_sessions": sum(discovered) if discovered else None,
+        "processed_sessions": sum(processed) if processed else None,
+        "last_successful_read_at": min(reads) if reads else None,
+    }
+
+
+def build_snapshot_coverage(rows, sources, scope):
+    return assemble_coverage([session_flags(s) for s in rows], sources, scope)
+
+
+def unknown_coverage(scope):
+    """Honest placeholder before the first collector cycle published data."""
+    return assemble_coverage([], [], scope)
+
+
+def range_coverage(selected_facts, basis, days, project, task_group, source):
+    """Coverage for one analytics range over the exact selected facts.
+
+    Source-wide fields are inherited from the published basis; breakdowns and
+    detail fields are recomputed for the selected sessions only. ``catching_up``
+    is range-precise: a global catch-up that cannot touch the selected range
+    does not flag it.
+    """
+    base = dict(basis or {})
+    flags = [f["session_flags"] for f in selected_facts]
+    selected_kinds = {
+        SESSION_SOURCE_KINDS.get(f.get("source"))
+        for f in selected_facts
+        if f.get("source")
+    }
+    catching_kinds = set(base.get("catching_kinds") or ())
+    details = _coverage_details(flags)
+    return {
+        "scope": {
+            "kind": "range",
+            "days": days,
+            "project": project or "",
+            "task_group": task_group or "",
+            "source": source or "",
+            "sessions_in_range": len(selected_facts),
+        },
+        "metadata_complete": base.get("metadata_complete"),
+        "aggregates_complete": base.get("aggregates_complete"),
+        "history_limited": base.get("metadata_complete") is False,
+        "breakdowns": coverage_breakdowns(flags),
+        "breakdown_details": coverage_breakdown_details(flags),
+        "details_truncated": details["details_truncated"],
+        "detail_events_evicted": details["detail_events_evicted"],
+        "catching_up": bool(
+            any(not f["aggregate"] for f in flags)
+            or (catching_kinds & selected_kinds)
+        ),
+        "source_stale": bool(base.get("source_stale")),
+        "read_blocked": bool(base.get("read_blocked")),
+        "discovered_sessions": base.get("discovered_sessions"),
+        "processed_sessions": base.get("processed_sessions"),
+        "last_successful_read_at": base.get("last_successful_read_at"),
+    }
+
+
+def compute_analytics(facts, cutoff, cfg, days, project, task_group, source, basis=None):
     """Pure aggregation over pre-built facts (no session deep copies)."""
     models = {}
     daily = defaultdict(zero_usage)
     filetotals = defaultdict(float)
     selected = 0
+    selected_facts = []
     token_total = 0
     dropped = 0
     cutoff_day = day(cutoff) if cutoff else ""
@@ -314,6 +568,7 @@ def compute_analytics(facts, cutoff, cfg, days, project, task_group, source):
         if cutoff and s["updated"] < cutoff:
             continue
         selected += 1
+        selected_facts.append(s)
         dropped += s.get("usage_events_dropped", 0)
         if cutoff:
             session_tokens = 0
@@ -428,6 +683,7 @@ def compute_analytics(facts, cutoff, cfg, days, project, task_group, source):
         "task_group": task_group,
         "project": project,
         "usage_events_dropped": dropped,
+        "coverage": range_coverage(selected_facts, basis, days, project, task_group, source),
     }
 
 
@@ -463,7 +719,16 @@ class Engine:
             if self.config_path.exists():
                 raw = json.loads(self.config_path.read_text("utf-8"))
             else:
-                raw = default_config()
+                raw = {}
+            # Legacy v5 configuration files have no version marker. Known
+            # settings are preserved exactly; unknown keys are archived into the
+            # observer store instead of being silently dropped.
+            raw, archived = migrate_config(raw, set(default_config()))
+            if archived:
+                history = self.store.setting("migrated_config_backup", []) or []
+                history.append({"archived_at": now_ms(), "keys": archived})
+                self.store.set_setting("migrated_config_backup", history[-10:])
+                LOG.warning("Archived unknown legacy settings: %s", ", ".join(sorted(archived)))
             raw.update(overrides or {})
             self.cfg = validate_config(raw)
             self.lock = threading.RLock()
@@ -471,12 +736,17 @@ class Engine:
             self.stop = threading.Event()
             self.wake = threading.Event()
             self.db_cache = {}
+            self._aggregate_state = {}
             self.codex_cache = {}
             self.router_cache = {}
             self.git_cache = {}
             self.scan_result = {"running": False, "items": []}
             self.sessions = {}
             self.previous_states = {}
+            # Persisted per-source read freshness: a failed or deadline-limited
+            # read keeps the last successful timestamp instead of faking one.
+            self._read_health = dict(self.store.setting("source_read_health", {}) or {})
+            self._coverage_basis = None
             self.snapshot = {
                 "version": VERSION,
                 "generated_at": 0,
@@ -487,7 +757,7 @@ class Engine:
                 "alerts": [],
                 "definitions": [],
                 "router": [],
-                "coverage": [],
+                "coverage": unknown_coverage({"kind": "snapshot", "sessions_loaded": 0}),
             }
             self.started = now_ms()
             self.port = 8765
@@ -608,18 +878,21 @@ class Engine:
                 rows, dirs, coverage = copy.deepcopy(cached[1])
                 src.update(coverage)
                 src["ok"] = True
+                self._mark_read(src["id"], not stale, note or None)
             except Exception as e:
                 if cached is None:
-                    src.update(ok=False, error=redact(e, 240))
+                    src.update(ok=False, error=redact(e, 240), read_blocked=True)
                 else:
                     # Never drop every session on a transient read failure: fall
                     # back to the last complete snapshot and mark it stale.
                     rows, dirs, coverage = copy.deepcopy(cached[1])
                     src.update(coverage)
                     src.update(ok=False, stale=True, error=redact(e, 240))
+                self._mark_read(src["id"], False, e)
             if stale:
                 src["stale"] = True
                 src["error"] = note
+            self._aggregate_db_source(src, path, rows)
             projects.extend(dirs)
             for s in rows:
                 old = all_sessions.get(s["id"])
@@ -644,6 +917,7 @@ class Engine:
                     try:
                         statuses, rows, defs, info = fut.result()
                         src.update(ok=True, **info)
+                        self._mark_read(src["id"], True)
                         definitions.extend(defs)
                         for r in rows:
                             if not isinstance(r.get("id"), str):
@@ -706,6 +980,7 @@ class Engine:
                                 )
                     except Exception as e:
                         src.update(ok=False, error=redact(e, 240))
+                        self._mark_read(src["id"], False, e)
                     sources.append(src)
         enrich = [s for s in all_sessions.values() if s.get("_server") and s["state"] in ACTIVE][
             :40
@@ -726,7 +1001,53 @@ class Engine:
                 if child:
                     child["parent_id"] = parent["id"]
                     child["relationship"] = "delegated"
-        files, coverage = discover_codex_files(cfg["codex_homes"], cfg["codex_file_limit"])
+        all_files, coverage = discover_all_codex_files(cfg["codex_homes"])
+        done_checkpoints = self.store.checkpoints("codex")
+        total_files = len(all_files)
+        batch = max(1, int(cfg["codex_file_limit"]))
+        start = (int(self.store.setting("codex_cursor", 0) or 0)) % total_files if total_files else 0
+        stats = {}
+        files = []
+        reuse = []
+        over = []
+        last_read_index = None
+        for offset in range(total_files):
+            index = (start + offset) % total_files
+            path = all_files[index]
+            try:
+                stat = Path(path).stat()
+                size, mtime_ns = stat.st_size, stat.st_mtime_ns
+            except OSError:
+                continue
+            stats[path] = (size, mtime_ns)
+            saved = done_checkpoints.get(path) or {}
+            restorable = isinstance(saved.get("session"), dict)
+            unchanged = (
+                saved.get("complete")
+                and int(saved.get("size") or -1) == size
+                and saved.get("mtime_ns") is not None
+                and int(saved.get("mtime_ns") or 0) == mtime_ns
+            )
+            if unchanged and (path in self.codex_cache or restorable):
+                # Already aggregated and unchanged: publish the session from the
+                # cache or from the durable checkpoint payload instead of
+                # re-reading the file, so the snapshot keeps every processed
+                # Codex session (also across restarts) while the batch rotates.
+                reuse.append(path)
+                continue
+            if len(files) < batch:
+                files.append(path)
+                last_read_index = index
+            else:
+                # The file changed but this cycle's read budget is spent. It must
+                # still be published from its last known payload, and its
+                # completeness must not be claimed until the change is read.
+                over.append(path)
+        if total_files:
+            self.store.set_setting(
+                "codex_cursor",
+                (last_read_index + 1) % total_files if last_read_index is not None else start,
+            )
         codex_source = {
             "id": "codex-logs",
             "label": "Codex session logs",
@@ -746,18 +1067,40 @@ class Engine:
         codex_diag = Diagnostics()
         for path in files:
             try:
-                item = self.codex_cache.setdefault(
-                    path,
-                    {"reader": JsonlReader(), "session": make_session("codex", Path(path).stem)},
-                )
+                item = self.codex_cache.get(path)
+                if item is None:
+                    # A file changed while the observer was down must continue
+                    # from its durable checkpoint like any other change; only a
+                    # checkpoint without usable state starts from zero.
+                    item = _restore_codex_item(path, done_checkpoints.get(path) or {})
+                    if item is None:
+                        item = {
+                            "reader": JsonlReader(),
+                            "session": make_session("codex", Path(path).stem),
+                        }
+                    self.codex_cache[path] = item
                 reader = item["reader"]
                 records = reader.read(path)
                 if reader.reset:
+                    if (item["session"].get("usage") or {}).get("total"):
+                        # Keep publishing the last good state while a rewrite is
+                        # rebuilt, so a partial re-read never lowers the total.
+                        item["fallback"] = item["session"]
                     item["session"] = make_session("codex", Path(path).stem)
                 s = codex_apply(item["session"], records, codex_diag)
                 skipped += reader.skipped
-                if reader.offset < Path(path).stat().st_size:
+                try:
+                    size_now = Path(path).stat().st_size
+                except OSError:
+                    size_now = reader.resolved
+                catching = reader.resolved < size_now
+                if catching:
                     catching_up += 1
+                if item.get("fallback") is not None:
+                    if catching:
+                        s = item["fallback"]
+                    else:
+                        item.pop("fallback", None)
                 s["_log"] = path
                 ss = copy.deepcopy(s)
                 if (
@@ -777,16 +1120,81 @@ class Engine:
             except Exception as e:
                 problems.append(redact(str(path) + ": " + str(e), 220))
         # Release old file caches; history is rebuilt if they enter the selected window again.
-        self.codex_cache = {p: v for p, v in self.codex_cache.items() if p in set(files)}
+        self.codex_cache = {p: v for p, v in self.codex_cache.items() if p in set(all_files)}
+        for path in reuse + over:
+            item = self.codex_cache.get(path)
+            if not item:
+                item = _restore_codex_item(path, done_checkpoints.get(path) or {})
+                if item is None:
+                    continue
+                self.codex_cache[path] = item
+            ss = copy.deepcopy(item["session"])
+            old = all_sessions.get(ss["id"])
+            if old is None or ss["updated"] > old["updated"]:
+                all_sessions[ss["id"]] = ss
+            if ss["directory"]:
+                projects.append(ss["directory"])
+        updates = {}
+        for path in files:
+            item = self.codex_cache.get(path)
+            if not item:
+                continue
+            try:
+                stat = Path(path).stat()
+            except OSError:
+                continue
+            # Only a state whose every read byte was folded into complete,
+            # accounted lines may be checkpointed; an unfinished tail (or an
+            # unfinished rebuild) keeps the previous good checkpoint instead.
+            complete = item["reader"].resolved >= stat.st_size
+            if complete:
+                # Keep the processed session itself in the durable checkpoint so
+                # a restart can publish every accounted Codex session without
+                # re-reading unchanged logs and without inventing totals.
+                data = {
+                    "size": stat.st_size,
+                    "complete": True,
+                    "session": codex_session_payload(item["session"]),
+                    "mtime_ns": stat.st_mtime_ns,
+                    "offset": item["reader"].resolved,
+                    "reader_version": READER_VERSION,
+                }
+                if item["reader"].identity:
+                    data["identity"] = list(item["reader"].identity)
+                updates[path] = data
+        if updates:
+            self.store.put_checkpoints("codex", list(updates.items()))
+        done_checkpoints.update(updates)
+        files_complete = 0
+        for path in all_files:
+            cp = done_checkpoints.get(path) or {}
+            stat_pair = stats.get(path)
+            if (
+                cp.get("complete")
+                and stat_pair is not None
+                and cp.get("size") == stat_pair[0]
+                and cp.get("mtime_ns") is not None
+                and cp.get("mtime_ns") == stat_pair[1]
+            ):
+                files_complete += 1
+        pending_files = max(0, int(coverage.get("files_found") or 0) - files_complete)
         codex_source.update(
+            files_found=int(coverage.get("files_found") or 0),
+            loaded_files=len(files) + len(reuse) + len(over),
+            files_complete=files_complete,
+            pending_files=pending_files,
+            aggregates_complete=pending_files == 0,
+            truncated=bool(coverage.get("truncated")),
             skipped_records=skipped,
-            catching_up=catching_up,
+            catching_up=catching_up + pending_files,
             issues=problems[:10],
             rejected_records=codex_diag.snapshot(),
         )
         if problems:
             codex_source["error"] = f"{len(problems)} unreadable Codex log(s)."
         sources.append(codex_source)
+        if cfg["codex_homes"]:
+            self._mark_read(codex_source["id"], True)
         for path in cfg["router_events"]:
             src = {
                 "id": digest("router", path),
@@ -847,8 +1255,10 @@ class Engine:
                     rejected_records=diag.snapshot(),
                 )
                 router.append({"source": str(path), "events": ledger, "coverage": public_copy(src)})
+                self._mark_read(src["id"], True)
             except Exception as e:
-                src.update(ok=False, error=redact(e, 240))
+                src.update(ok=False, error=redact(e, 240), read_blocked=True)
+                self._mark_read(src["id"], False, e)
             sources.append(src)
         # Explicit reports attach origin/task context to canonical sessions. They
         # never add tokens or override a live native status.
@@ -971,6 +1381,21 @@ class Engine:
         retained = {s["id"] for s in rows}
         self._prune_state_tracking(retained, cfg)
         facts = tuple(build_facts(rows))
+        for src in sources:
+            self._apply_coverage(src, rows)
+        coverage = build_snapshot_coverage(
+            rows,
+            sources,
+            {
+                "kind": "snapshot",
+                "window_limit": int(cfg["history_limit"]),
+                "sessions_loaded": len(rows),
+            },
+        )
+        coverage_basis = {
+            **coverage,
+            "catching_kinds": sorted({s["kind"] for s in sources if s.get("catching_up")}),
+        }
         # ``rows`` are already detached copies produced by the DB/codex read
         # windows, so publish them directly instead of duplicating the entire
         # session set (the duplicate deepcopy dominated cold-poll time at scale).
@@ -985,11 +1410,7 @@ class Engine:
             "alerts": alerts,
             "definitions": definitions,
             "router": router,
-            "coverage": [
-                s
-                for s in sources
-                if s.get("truncated") or s.get("catching_up") or s.get("stale")
-            ],
+            "coverage": coverage,
             "privacy": {
                 "show_prompts": cfg["show_prompts"],
                 "reporting": cfg["enable_reporting"],
@@ -1001,8 +1422,59 @@ class Engine:
             self._facts = facts
             self._facts_revision += 1
             self._analytics_cache.clear()
+            self._coverage_basis = coverage_basis
             self.snapshot = snapshot
         self.store.prune(cfg["history_days"])
+
+    def _mark_read(self, src_id, ok, error=None):
+        """Persist per-source read freshness without ever inventing a timestamp."""
+        health = self._read_health.setdefault(src_id, {})
+        if ok:
+            health["last_success_at"] = now_ms()
+        else:
+            health["last_error_at"] = now_ms()
+            health["last_error"] = redact(error or "read failed", 240)
+        self.store.set_setting("source_read_health", self._read_health)
+
+    def _apply_coverage(self, src, rows):
+        """Attach the per-source completeness fields used by every coverage view."""
+        health = self._read_health.get(src.get("id")) or {}
+        src["last_successful_read_at"] = health.get("last_success_at")
+        src["last_error_at"] = health.get("last_error_at")
+        src["read_blocked"] = bool(src.get("read_blocked"))
+        kind = src.get("kind")
+        if kind == "database":
+            src["scoped"] = True
+            if src.get("ok") is False and not src.get("stale"):
+                src["metadata_complete"] = None
+                src["discovered_sessions"] = None
+                src["processed_sessions"] = None
+                src["aggregates_complete"] = False
+            else:
+                expected = int(src.get("total_sessions") or 0)
+                loaded = int(src.get("metadata_sessions") or 0)
+                src["metadata_complete"] = loaded >= expected
+                src["discovered_sessions"] = expected
+                done = src.get("aggregate_sessions_complete")
+                src["processed_sessions"] = int(done) if done is not None else None
+            flags = [
+                session_flags(s)
+                for s in rows
+                if path_key(s.get("_db") or "") == path_key(src.get("location") or "")
+            ]
+            src["breakdowns"] = coverage_breakdowns(flags)
+            src["detail_events_evicted"] = sum(f["evicted"] for f in flags)
+        elif kind == "codex":
+            ok = src.get("ok") is not False
+            # No configured Codex home is "out of scope", not "incomplete".
+            src["scoped"] = ok
+            src["metadata_complete"] = (not src.get("truncated")) if ok else None
+            src["discovered_sessions"] = int(src.get("files_found") or 0) if ok else None
+            src["processed_sessions"] = int(src.get("files_complete") or 0) if ok else None
+            flags = [session_flags(s) for s in rows if s.get("source") == "codex"]
+            src["breakdowns"] = coverage_breakdowns(flags)
+            src["detail_events_evicted"] = sum(f["evicted"] for f in flags)
+        return src
 
     def _prune_state_tracking(self, retained, cfg):
         """Bound state-change memory and per-source caches to what is retained.
@@ -1026,9 +1498,83 @@ class Engine:
         for path in list(self.router_cache):
             if path not in router_paths:
                 del self.router_cache[path]
+        aggregate_sources = {"opencode:" + path_key(p) for p in db_paths}
+        for source_id in list(self._aggregate_state):
+            if source_id not in aggregate_sources:
+                del self._aggregate_state[source_id]
         for path in list(self.git_cache):
             if time.time() - self.git_cache[path][0] > self.GIT_CACHE_TTL:
                 del self.git_cache[path]
+
+    def _aggregate_db_source(self, src, path, rows):
+        """Commit budget-bounded usage aggregates for one OpenCode database.
+
+        Independently of the (bounded) detail window, every session's usage is
+        accumulated over all step-finish parts in ascending key order and the
+        cursor is persisted together with the counters, so a cycle can stop at
+        any page boundary without losing or double counting tokens. A cycle
+        resumes where the previous one stopped, so a finite source reaches full
+        coverage instead of stopping at the first deadline.
+        """
+        if not rows:
+            if src.get("ok"):
+                src.update(
+                    aggregates_complete=True,
+                    aggregate_sessions_complete=0,
+                    pending_sessions=0,
+                    details_truncated=False,
+                )
+            else:
+                src.update(aggregates_complete=False, pending_sessions=None)
+            return
+        source_id = "opencode:" + path_key(path)
+        checkpoints = self.store.checkpoints(source_id)
+        order = sorted(rows, key=lambda s: s.get("updated") or 0, reverse=True)
+        pairs = [(s["native_id"], s.get("updated") or 0) for s in order]
+        state = self._aggregate_state.setdefault(source_id, {"next_index": 0})
+        pending = {}
+        deadline = time.monotonic() + AGGREGATE_BUDGET_SECONDS
+        try:
+            with readonly_db(path) as con:
+                aggregate_source(
+                    con,
+                    pairs,
+                    checkpoints,
+                    deadline,
+                    lambda sid, st, _p=pending: _p.__setitem__(sid, st),
+                    state=state,
+                )
+            if pending:
+                self.store.put_checkpoints(source_id, list(pending.items()))
+        except Exception as e:
+            # Never publish aggregates we could not persist; the next cycle
+            # retries from the last committed checkpoint.
+            src["aggregate_error"] = redact(e, 160)
+            src["aggregates_complete"] = False
+            src["pending_sessions"] = None
+            src["catching_up"] = True
+            return
+        complete = 0
+        for s in rows:
+            st = checkpoints.get(s["native_id"])
+            if st and st.get("complete"):
+                # Only override when the aggregate actually accounted for
+                # parts; sessions with no parts at all keep the reader's
+                # recorded fallback (message-level tokens) untouched.
+                if st.get("parts") and (st.get("usage") or {}).get("total"):
+                    s["usage"] = dict(st["usage"])
+                    s["usage_known"] = True
+                s["_aggregate_complete"] = True
+                complete += 1
+            else:
+                s["_aggregate_complete"] = False
+        expected = int(src.get("metadata_sessions") or len(rows))
+        src["aggregate_sessions_complete"] = complete
+        src["pending_sessions"] = max(0, expected - complete)
+        src["aggregates_complete"] = src["pending_sessions"] == 0
+        src["details_truncated"] = bool(src.get("truncated_sessions"))
+        if src["pending_sessions"]:
+            src["catching_up"] = True
 
     @staticmethod
     def summary(s):
@@ -1137,11 +1683,14 @@ class Engine:
             revision = self._facts_revision
             config_revision = self._config_revision
             facts = self._facts
+            basis = self._coverage_basis
             cache_key = (revision, config_revision, day(now_ms())) + key
             cached = self._analytics_cache.get(cache_key)
         if cached is None:
             # Aggregation runs outside the lock over one immutable revision.
-            cached = compute_analytics(facts, cutoff, cfg, days, project, task_group, source)
+            cached = compute_analytics(
+                facts, cutoff, cfg, days, project, task_group, source, basis=basis
+            )
             with self.lock:
                 if self._facts_revision == revision and self._config_revision == config_revision:
                     self._analytics_cache[cache_key] = cached

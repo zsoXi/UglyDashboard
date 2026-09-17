@@ -794,8 +794,12 @@ code {
 }
 
 .notice.coverage-note {
-  border-left-color: var(--red);
+  border-left-color: var(--accent);
   color: var(--text);
+}
+
+.notice.coverage-note.coverage-degraded {
+  border-left-color: var(--red);
   font-weight: 500;
 }
 
@@ -1954,6 +1958,15 @@ a:focus-visible {
   color: var(--muted);
 }
 .iconbutton:hover {
+  color: var(--text);
+}
+.langbutton {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.langbutton:hover {
   color: var(--text);
 }
 .skip-link {
