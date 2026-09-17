@@ -875,6 +875,20 @@ def discover_codex_files(homes, limit):
     }
 
 
+def discover_all_codex_files(homes):
+    """Every discovered Codex log, newest first.
+
+    Same walk and safety caps as `discover_codex_files`, but without the
+    per-cycle file window: the caller decides how many files to process in a
+    single cycle and must be able to reach all of them across cycles.
+    """
+    files, coverage = discover_codex_files(homes, 10**9)
+    return files, {
+        "files_found": coverage["files_found"],
+        "truncated": coverage["truncated"],
+    }
+
+
 def read_definitions(projects):
     paths = [HOME / ".config/opencode/agents", HOME / ".config/opencode/agent"]
     for p in projects:

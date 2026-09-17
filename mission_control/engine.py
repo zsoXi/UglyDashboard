@@ -43,7 +43,7 @@ from .incremental import AGGREGATE_BUDGET_SECONDS, aggregate_source
 from .sources import (
     JsonlReader,
     codex_apply,
-    discover_codex_files,
+    discover_all_codex_files,
     enrich_oc_session,
     git_info,
     local_json,
@@ -730,7 +730,36 @@ class Engine:
                 if child:
                     child["parent_id"] = parent["id"]
                     child["relationship"] = "delegated"
-        files, coverage = discover_codex_files(cfg["codex_homes"], cfg["codex_file_limit"])
+        all_files, coverage = discover_all_codex_files(cfg["codex_homes"])
+        done_checkpoints = self.store.checkpoints("codex")
+        total_files = len(all_files)
+        batch = max(1, int(cfg["codex_file_limit"]))
+        start = (int(self.store.setting("codex_cursor", 0) or 0)) % total_files if total_files else 0
+        files = []
+        reuse = []
+        next_index = start
+        for offset in range(total_files):
+            index = (start + offset) % total_files
+            path = all_files[index]
+            try:
+                size = Path(path).stat().st_size
+            except OSError:
+                next_index = (index + 1) % total_files
+                continue
+            saved = done_checkpoints.get(path) or {}
+            if saved.get("complete") and int(saved.get("size") or -1) == size:
+                # Already aggregated and unchanged: publish the cached session
+                # below instead of re-reading the file, so the snapshot keeps
+                # every processed Codex session while the batch rotates.
+                reuse.append(path)
+                next_index = (index + 1) % total_files
+                continue
+            files.append(path)
+            next_index = (index + 1) % total_files
+            if len(files) >= batch:
+                break
+        if total_files:
+            self.store.set_setting("codex_cursor", next_index)
         codex_source = {
             "id": "codex-logs",
             "label": "Codex session logs",
@@ -781,10 +810,43 @@ class Engine:
             except Exception as e:
                 problems.append(redact(str(path) + ": " + str(e), 220))
         # Release old file caches; history is rebuilt if they enter the selected window again.
-        self.codex_cache = {p: v for p, v in self.codex_cache.items() if p in set(files)}
+        self.codex_cache = {p: v for p, v in self.codex_cache.items() if p in set(all_files)}
+        for path in reuse:
+            item = self.codex_cache.get(path)
+            if not item:
+                continue
+            ss = copy.deepcopy(item["session"])
+            old = all_sessions.get(ss["id"])
+            if old is None or ss["updated"] > old["updated"]:
+                all_sessions[ss["id"]] = ss
+            if ss["directory"]:
+                projects.append(ss["directory"])
+        updates = {}
+        for path in files:
+            item = self.codex_cache.get(path)
+            if not item:
+                continue
+            try:
+                size = Path(path).stat().st_size
+            except OSError:
+                continue
+            updates[path] = {"size": size, "complete": item["reader"].offset >= size}
+        if updates:
+            self.store.put_checkpoints("codex", list(updates.items()))
+        done_checkpoints.update(updates)
+        files_complete = sum(
+            1 for path in all_files if (done_checkpoints.get(path) or {}).get("complete")
+        )
+        pending_files = max(0, int(coverage.get("files_found") or 0) - files_complete)
         codex_source.update(
+            files_found=int(coverage.get("files_found") or 0),
+            loaded_files=len(files) + len(reuse),
+            files_complete=files_complete,
+            pending_files=pending_files,
+            aggregates_complete=pending_files == 0,
+            truncated=bool(coverage.get("truncated")),
             skipped_records=skipped,
-            catching_up=catching_up,
+            catching_up=catching_up + pending_files,
             issues=problems[:10],
             rejected_records=codex_diag.snapshot(),
         )
