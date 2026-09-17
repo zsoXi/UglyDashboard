@@ -10,7 +10,7 @@ lokalnych danych użytkownika. Liczby pochodzą z `TEST_REPORT.json`
   commitów. E.4 to commit końcowy (zawiera m.in. ten dokument).
 - Baza: `fix/mission-control-v5-hardening-ui` @ `5685080` (PR #1 nadal
   otwarty). PR V6: #2 (draft, aktualizowany na końcowym commicie).
-- Worktree: `D:\TESTY!\Dashboard\V6\UglyDashboard` — izolowany od
+- Worktree: `<ścieżka do worktree V6>` — izolowany od
   działającej v5 na porcie 8765; jej dane nie były modyfikowane.
 - Testy manualne V6: port 8780 + osobny katalog stanu.
 - CI (`.github/workflows/ci.yml`): Windows + Ubuntu × Python 3.10/3.14,

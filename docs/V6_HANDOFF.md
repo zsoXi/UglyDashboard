@@ -8,10 +8,10 @@ jako `%USERPROFILE%` — nie kopiuj ich do repo.
 
 | Rola | Ścieżka | Gałąź / stan | Uwaga |
 | --- | --- | --- | --- |
-| v5 (produkcja, działająca) | `D:\TESTY!\Dashboard\V2\OpenCode_Mission_Control_v4` | `fix/mission-control-v5-hardening-ui` @ `5685080` | instancja na porcie 8765 (PID może się zmienić) |
-| V6 (ukończone E.4) | `D:\TESTY!\Dashboard\V6\UglyDashboard` (git worktree) | `feat/mission-control-v6` @ commit E.4 | port testowy 8780, osobny katalog stanu |
-| Dashboard porównawczy | `D:\TESTY!\Dashboard\opencode_dashboard.py` | — | port 8770; NIE modyfikować |
-| Raport odniesienia | `D:\TESTY!\V3\little-better-dashboard` | — | nie był źródłem procesu na 8770 |
+| v5 (produkcja, działająca) | `<ścieżka do checkoutu v5>` | `fix/mission-control-v5-hardening-ui` @ `5685080` | instancja na porcie 8765 (PID może się zmienić) |
+| V6 (ukończone E.4) | `<ścieżka do worktree V6>` (git worktree) | `feat/mission-control-v6` @ commit E.4 | port testowy 8780, osobny katalog stanu |
+| Dashboard porównawczy | `<ścieżka do dashboardu porównawczego>` | — | port 8770; NIE modyfikować |
+| Raport odniesienia | `<ścieżka do raportu odniesienia>` | — | nie był źródłem procesu na 8770 |
 
 Repo: `https://github.com/zsoXi/UglyDashboard`
 
@@ -47,12 +47,12 @@ Stan bieżący (zweryfikowany na końcowym stanie):
 
 ```powershell
 # 1. Worktree (jeśli istnieje — nic nie rób; jeśli zniknie, odtwórz):
-git -C "D:\TESTY!\Dashboard\V2\OpenCode_Mission_Control_v4" fetch origin
-git -C "D:\TESTY!\Dashboard\V2\OpenCode_Mission_Control_v4" worktree add "D:\TESTY!\Dashboard\V6\UglyDashboard" feat/mission-control-v6
+git -C "<ścieżka do checkoutu v5>" fetch origin
+git -C "<ścieżka do checkoutu v5>" worktree add "<ścieżka do worktree V6>" feat/mission-control-v6
 
 # 2. Zależności frontendu (potrzebne do testów i buildu; samo uruchomienie
 #    panelu w trybie produkcyjnym działa z zacommitowanego web/dist):
-npm --prefix "D:\TESTY!\Dashboard\V6\UglyDashboard" ci
+npm --prefix "<ścieżka do worktree V6>" ci
 
 # 3. Testy Python (Python 3.10+; runtime jest stdlib):
 python -X utf8 scripts/run_tests.py
