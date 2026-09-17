@@ -260,6 +260,7 @@ def build_fact(s):
         "daily": {d: dict(u) for d, u in daily.items()},
         "daily_models": {d: {k: dict(v) for k, v in m.items()} for d, m in daily_models.items()},
         "usage_events_dropped": s.get("usage_events_dropped", 0),
+        "session_flags": session_flags(s),
     }
 
 
@@ -274,12 +275,208 @@ def build_facts(rows):
     return [build_fact(s) for s in rows]
 
 
-def compute_analytics(facts, cutoff, cfg, days, project, task_group, source):
+COVERAGE_COMPLETE = "complete"
+COVERAGE_PARTIAL = "partial"
+COVERAGE_UNKNOWN = "unknown"
+
+# Which session source each coverage-relevant kind of source feeds.
+SESSION_SOURCE_KINDS = {"opencode": "database", "codex": "codex"}
+
+
+def session_flags(s):
+    """Exact per-session completeness facts shared by every coverage surface.
+
+    ``ledger`` compares the kept usage-event ledger with the session total,
+    ``daily``/``model`` are only complete when that ledger covers the full
+    total, ``file`` records whether the detail window kept the whole history,
+    ``detail_pending`` marks sessions whose detail may still change and
+    ``aggregate`` marks usage aggregates that are still catching up. A complete
+    overall total never inflates a partial breakdown on its own.
+    """
+    usage = s.get("usage") or {}
+    total = int(number(usage.get("total")))
+    events = s.get("usage_events") or []
+    dropped = int(s.get("usage_events_dropped") or 0)
+    ledger_total = sum(int(number(e.get("total"))) for e in events)
+    ledger_ok = dropped == 0 and ledger_total == total
+    daily_ok = ledger_ok and all(day(e.get("ts")) for e in events)
+    model_total = sum(
+        int(number((m.get("usage") or {}).get("total")))
+        for m in (s.get("model_usage") or {}).values()
+    )
+    model_ok = ledger_ok and model_total == total
+    detail_pending = bool(
+        s.get("parts_truncated")
+        or s.get("messages_truncated")
+        or s.get("_aggregate_truncated")
+        or s.get("_pending_detail")
+    )
+    return {
+        "ledger": ledger_ok,
+        "daily": daily_ok,
+        "model": model_ok,
+        "file": not detail_pending,
+        "evicted": dropped,
+        "detail_pending": detail_pending,
+        "aggregate": bool(s.get("_aggregate_complete", True)),
+    }
+
+
+def _flag_status(flags, key):
+    if not flags:
+        return COVERAGE_UNKNOWN
+    return COVERAGE_COMPLETE if all(f[key] for f in flags) else COVERAGE_PARTIAL
+
+
+def _conclude(values):
+    """True only when every source explicitly reports True, None when unknown."""
+    if not values:
+        return None
+    if any(v is False for v in values):
+        return False
+    if any(v is None for v in values):
+        return None
+    return True
+
+
+def coverage_breakdowns(flags):
+    return {
+        "daily": _flag_status(flags, "daily"),
+        "model": _flag_status(flags, "model"),
+        "file": _flag_status(flags, "file"),
+    }
+
+
+def coverage_breakdown_details(flags):
+    return {
+        "sessions_scored": len(flags),
+        "daily_partial_sessions": sum(1 for f in flags if not f["daily"]),
+        "model_partial_sessions": sum(1 for f in flags if not f["model"]),
+        "file_partial_sessions": sum(1 for f in flags if not f["file"]),
+    }
+
+
+def _coverage_details(flags):
+    return {
+        "details_truncated": any(f["detail_pending"] for f in flags),
+        "detail_events_evicted": sum(f["evicted"] for f in flags),
+    }
+
+
+def assemble_coverage(flags, sources, scope):
+    """One coverage block shared by the snapshot, analytics, exports and MCP.
+
+    Source-wide fields (metadata, aggregates, discovery counts, freshness)
+    describe the loaded source window; breakdowns and detail fields are scored
+    on the exact session flags they receive, so a complete total never implies
+    a complete per-day, per-model or per-file split.
+    """
+    session_sources = [
+        s
+        for s in sources
+        if s.get("kind") in ("database", "codex") and s.get("scoped") is not False
+    ]
+    discovered = [
+        s.get("discovered_sessions")
+        for s in session_sources
+        if s.get("discovered_sessions") is not None
+    ]
+    processed = [
+        s.get("processed_sessions")
+        for s in session_sources
+        if s.get("processed_sessions") is not None
+    ]
+    reads = [
+        s.get("last_successful_read_at")
+        for s in session_sources
+        if s.get("last_successful_read_at")
+    ]
+    metadata_complete = _conclude([s.get("metadata_complete") for s in session_sources])
+    details = _coverage_details(flags)
+    return {
+        "scope": dict(scope),
+        "metadata_complete": metadata_complete,
+        "aggregates_complete": _conclude(
+            [s.get("aggregates_complete") for s in session_sources]
+        ),
+        "history_limited": metadata_complete is False,
+        "breakdowns": coverage_breakdowns(flags),
+        "breakdown_details": coverage_breakdown_details(flags),
+        "details_truncated": details["details_truncated"],
+        "detail_events_evicted": details["detail_events_evicted"],
+        "catching_up": bool(
+            any(s.get("catching_up") for s in sources)
+            or any(not f["aggregate"] for f in flags)
+        ),
+        "source_stale": any(s.get("stale") for s in sources),
+        "read_blocked": any(s.get("read_blocked") for s in sources),
+        "discovered_sessions": sum(discovered) if discovered else None,
+        "processed_sessions": sum(processed) if processed else None,
+        "last_successful_read_at": min(reads) if reads else None,
+    }
+
+
+def build_snapshot_coverage(rows, sources, scope):
+    return assemble_coverage([session_flags(s) for s in rows], sources, scope)
+
+
+def unknown_coverage(scope):
+    """Honest placeholder before the first collector cycle published data."""
+    return assemble_coverage([], [], scope)
+
+
+def range_coverage(selected_facts, basis, days, project, task_group, source):
+    """Coverage for one analytics range over the exact selected facts.
+
+    Source-wide fields are inherited from the published basis; breakdowns and
+    detail fields are recomputed for the selected sessions only. ``catching_up``
+    is range-precise: a global catch-up that cannot touch the selected range
+    does not flag it.
+    """
+    base = dict(basis or {})
+    flags = [f["session_flags"] for f in selected_facts]
+    selected_kinds = {
+        SESSION_SOURCE_KINDS.get(f.get("source"))
+        for f in selected_facts
+        if f.get("source")
+    }
+    catching_kinds = set(base.get("catching_kinds") or ())
+    details = _coverage_details(flags)
+    return {
+        "scope": {
+            "kind": "range",
+            "days": days,
+            "project": project or "",
+            "task_group": task_group or "",
+            "source": source or "",
+            "sessions_in_range": len(selected_facts),
+        },
+        "metadata_complete": base.get("metadata_complete"),
+        "aggregates_complete": base.get("aggregates_complete"),
+        "history_limited": base.get("metadata_complete") is False,
+        "breakdowns": coverage_breakdowns(flags),
+        "breakdown_details": coverage_breakdown_details(flags),
+        "details_truncated": details["details_truncated"],
+        "detail_events_evicted": details["detail_events_evicted"],
+        "catching_up": bool(
+            any(not f["aggregate"] for f in flags)
+            or (catching_kinds & selected_kinds)
+        ),
+        "source_stale": bool(base.get("source_stale")),
+        "read_blocked": bool(base.get("read_blocked")),
+        "discovered_sessions": base.get("discovered_sessions"),
+        "processed_sessions": base.get("processed_sessions"),
+        "last_successful_read_at": base.get("last_successful_read_at"),
+    }
+
+
+def compute_analytics(facts, cutoff, cfg, days, project, task_group, source, basis=None):
     """Pure aggregation over pre-built facts (no session deep copies)."""
     models = {}
     daily = defaultdict(zero_usage)
     filetotals = defaultdict(float)
     selected = 0
+    selected_facts = []
     token_total = 0
     dropped = 0
     cutoff_day = day(cutoff) if cutoff else ""
@@ -316,6 +513,7 @@ def compute_analytics(facts, cutoff, cfg, days, project, task_group, source):
         if cutoff and s["updated"] < cutoff:
             continue
         selected += 1
+        selected_facts.append(s)
         dropped += s.get("usage_events_dropped", 0)
         if cutoff:
             session_tokens = 0
@@ -430,6 +628,7 @@ def compute_analytics(facts, cutoff, cfg, days, project, task_group, source):
         "task_group": task_group,
         "project": project,
         "usage_events_dropped": dropped,
+        "coverage": range_coverage(selected_facts, basis, days, project, task_group, source),
     }
 
 
@@ -480,6 +679,10 @@ class Engine:
             self.scan_result = {"running": False, "items": []}
             self.sessions = {}
             self.previous_states = {}
+            # Persisted per-source read freshness: a failed or deadline-limited
+            # read keeps the last successful timestamp instead of faking one.
+            self._read_health = dict(self.store.setting("source_read_health", {}) or {})
+            self._coverage_basis = None
             self.snapshot = {
                 "version": VERSION,
                 "generated_at": 0,
@@ -490,7 +693,7 @@ class Engine:
                 "alerts": [],
                 "definitions": [],
                 "router": [],
-                "coverage": [],
+                "coverage": unknown_coverage({"kind": "snapshot", "sessions_loaded": 0}),
             }
             self.started = now_ms()
             self.port = 8765
@@ -611,15 +814,17 @@ class Engine:
                 rows, dirs, coverage = copy.deepcopy(cached[1])
                 src.update(coverage)
                 src["ok"] = True
+                self._mark_read(src["id"], not stale, note or None)
             except Exception as e:
                 if cached is None:
-                    src.update(ok=False, error=redact(e, 240))
+                    src.update(ok=False, error=redact(e, 240), read_blocked=True)
                 else:
                     # Never drop every session on a transient read failure: fall
                     # back to the last complete snapshot and mark it stale.
                     rows, dirs, coverage = copy.deepcopy(cached[1])
                     src.update(coverage)
                     src.update(ok=False, stale=True, error=redact(e, 240))
+                self._mark_read(src["id"], False, e)
             if stale:
                 src["stale"] = True
                 src["error"] = note
@@ -648,6 +853,7 @@ class Engine:
                     try:
                         statuses, rows, defs, info = fut.result()
                         src.update(ok=True, **info)
+                        self._mark_read(src["id"], True)
                         definitions.extend(defs)
                         for r in rows:
                             if not isinstance(r.get("id"), str):
@@ -710,6 +916,7 @@ class Engine:
                                 )
                     except Exception as e:
                         src.update(ok=False, error=redact(e, 240))
+                        self._mark_read(src["id"], False, e)
                     sources.append(src)
         enrich = [s for s in all_sessions.values() if s.get("_server") and s["state"] in ACTIVE][
             :40
@@ -853,6 +1060,8 @@ class Engine:
         if problems:
             codex_source["error"] = f"{len(problems)} unreadable Codex log(s)."
         sources.append(codex_source)
+        if cfg["codex_homes"]:
+            self._mark_read(codex_source["id"], True)
         for path in cfg["router_events"]:
             src = {
                 "id": digest("router", path),
@@ -913,8 +1122,10 @@ class Engine:
                     rejected_records=diag.snapshot(),
                 )
                 router.append({"source": str(path), "events": ledger, "coverage": public_copy(src)})
+                self._mark_read(src["id"], True)
             except Exception as e:
-                src.update(ok=False, error=redact(e, 240))
+                src.update(ok=False, error=redact(e, 240), read_blocked=True)
+                self._mark_read(src["id"], False, e)
             sources.append(src)
         # Explicit reports attach origin/task context to canonical sessions. They
         # never add tokens or override a live native status.
@@ -1037,6 +1248,21 @@ class Engine:
         retained = {s["id"] for s in rows}
         self._prune_state_tracking(retained, cfg)
         facts = tuple(build_facts(rows))
+        for src in sources:
+            self._apply_coverage(src, rows)
+        coverage = build_snapshot_coverage(
+            rows,
+            sources,
+            {
+                "kind": "snapshot",
+                "window_limit": int(cfg["history_limit"]),
+                "sessions_loaded": len(rows),
+            },
+        )
+        coverage_basis = {
+            **coverage,
+            "catching_kinds": sorted({s["kind"] for s in sources if s.get("catching_up")}),
+        }
         # ``rows`` are already detached copies produced by the DB/codex read
         # windows, so publish them directly instead of duplicating the entire
         # session set (the duplicate deepcopy dominated cold-poll time at scale).
@@ -1051,11 +1277,7 @@ class Engine:
             "alerts": alerts,
             "definitions": definitions,
             "router": router,
-            "coverage": [
-                s
-                for s in sources
-                if s.get("truncated") or s.get("catching_up") or s.get("stale")
-            ],
+            "coverage": coverage,
             "privacy": {
                 "show_prompts": cfg["show_prompts"],
                 "reporting": cfg["enable_reporting"],
@@ -1067,8 +1289,59 @@ class Engine:
             self._facts = facts
             self._facts_revision += 1
             self._analytics_cache.clear()
+            self._coverage_basis = coverage_basis
             self.snapshot = snapshot
         self.store.prune(cfg["history_days"])
+
+    def _mark_read(self, src_id, ok, error=None):
+        """Persist per-source read freshness without ever inventing a timestamp."""
+        health = self._read_health.setdefault(src_id, {})
+        if ok:
+            health["last_success_at"] = now_ms()
+        else:
+            health["last_error_at"] = now_ms()
+            health["last_error"] = redact(error or "read failed", 240)
+        self.store.set_setting("source_read_health", self._read_health)
+
+    def _apply_coverage(self, src, rows):
+        """Attach the per-source completeness fields used by every coverage view."""
+        health = self._read_health.get(src.get("id")) or {}
+        src["last_successful_read_at"] = health.get("last_success_at")
+        src["last_error_at"] = health.get("last_error_at")
+        src["read_blocked"] = bool(src.get("read_blocked"))
+        kind = src.get("kind")
+        if kind == "database":
+            src["scoped"] = True
+            if src.get("ok") is False and not src.get("stale"):
+                src["metadata_complete"] = None
+                src["discovered_sessions"] = None
+                src["processed_sessions"] = None
+                src["aggregates_complete"] = False
+            else:
+                expected = int(src.get("total_sessions") or 0)
+                loaded = int(src.get("metadata_sessions") or 0)
+                src["metadata_complete"] = loaded >= expected
+                src["discovered_sessions"] = expected
+                done = src.get("aggregate_sessions_complete")
+                src["processed_sessions"] = int(done) if done is not None else None
+            flags = [
+                session_flags(s)
+                for s in rows
+                if path_key(s.get("_db") or "") == path_key(src.get("location") or "")
+            ]
+            src["breakdowns"] = coverage_breakdowns(flags)
+            src["detail_events_evicted"] = sum(f["evicted"] for f in flags)
+        elif kind == "codex":
+            ok = src.get("ok") is not False
+            # No configured Codex home is "out of scope", not "incomplete".
+            src["scoped"] = ok
+            src["metadata_complete"] = (not src.get("truncated")) if ok else None
+            src["discovered_sessions"] = int(src.get("files_found") or 0) if ok else None
+            src["processed_sessions"] = int(src.get("files_complete") or 0) if ok else None
+            flags = [session_flags(s) for s in rows if s.get("source") == "codex"]
+            src["breakdowns"] = coverage_breakdowns(flags)
+            src["detail_events_evicted"] = sum(f["evicted"] for f in flags)
+        return src
 
     def _prune_state_tracking(self, retained, cfg):
         """Bound state-change memory and per-source caches to what is retained.
@@ -1146,6 +1419,7 @@ class Engine:
             src["aggregate_error"] = redact(e, 160)
             src["aggregates_complete"] = False
             src["pending_sessions"] = None
+            src["catching_up"] = True
             return
         complete = 0
         for s in rows:
@@ -1276,11 +1550,14 @@ class Engine:
             revision = self._facts_revision
             config_revision = self._config_revision
             facts = self._facts
+            basis = self._coverage_basis
             cache_key = (revision, config_revision, day(now_ms())) + key
             cached = self._analytics_cache.get(cache_key)
         if cached is None:
             # Aggregation runs outside the lock over one immutable revision.
-            cached = compute_analytics(facts, cutoff, cfg, days, project, task_group, source)
+            cached = compute_analytics(
+                facts, cutoff, cfg, days, project, task_group, source, basis=basis
+            )
             with self.lock:
                 if self._facts_revision == revision and self._config_revision == config_revision:
                     self._analytics_cache[cache_key] = cached

@@ -511,11 +511,20 @@ class Handler(BaseHTTPRequestHandler):
                     writer.writerow(fields)
                     for row in analytics["days"]:
                         writer.writerow([row.get(k, "") for k in fields])
+                    # Row/column limits must never hide the completeness contract:
+                    # the same coverage block as the JSON export travels with CSV.
                     self.send(
                         200,
                         out.getvalue(),
                         "text/csv; charset=utf-8",
-                        {"Content-Disposition": 'attachment; filename="mission-control-days.csv"'},
+                        {
+                            "Content-Disposition": 'attachment; filename="mission-control-days.csv"',
+                            "X-Mission-Control-Coverage": json.dumps(
+                                analytics.get("coverage") or {},
+                                ensure_ascii=True,
+                                separators=(",", ":"),
+                            ),
+                        },
                     )
                 elif kind == "json":
                     self.send(
