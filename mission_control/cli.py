@@ -305,6 +305,12 @@ def main():
         help="Optional shutdown after N seconds without requests. Default 0 keeps observer running.",
     )
     parser.add_argument(
+        "--dev-web",
+        action="store_true",
+        help="Serve the unbuilt web/ sources instead of the production dist bundle "
+        "(development only).",
+    )
+    parser.add_argument(
         "--mcp-stdio",
         action="store_true",
         help="Bridge stdio MCP to an already-running dashboard. Stdout is JSON-RPC only.",
@@ -362,7 +368,7 @@ def main():
     LOG.setLevel(logging.INFO)
     should_open = not args.no_open and (args.open or len(sys.argv) == 1)
     try:
-        server = Server(("127.0.0.1", args.port), engine)
+        server = Server(("127.0.0.1", args.port), engine, dev_web=args.dev_web)
     except OSError as ex:
         # 1) A healthy instance of this exact app that accepts our OWNER token
         #    and actually renders the dashboard shell can be reused. Never send
@@ -377,7 +383,7 @@ def main():
         server = None
         for candidate in range(args.port + 1, min(args.port + 51, 65536)):
             try:
-                server = Server(("127.0.0.1", candidate), engine)
+                server = Server(("127.0.0.1", candidate), engine, dev_web=args.dev_web)
                 LOG.warning("Port %s is in use; started on %s instead.", args.port, candidate)
                 if not args.quiet and sys.stdout:
                     print(f"Port {args.port} is in use; using {candidate} instead.")

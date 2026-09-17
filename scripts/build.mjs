@@ -1,6 +1,6 @@
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -27,12 +27,22 @@ await build({
   legalComments: 'none',
   logLevel: 'warning',
 });
+// The production artifact is what the server ships: index.html is copied into
+// dist so the manifest describes exactly the files the server reads.
+await copyFile(path.join(web, 'index.html'), path.join(dist, 'index.html'));
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const inputs = {},
   outputs = {};
+const inputNames = [
+  'index.html',
+  'app.js',
+  'style.css',
+  'i18n/en.js',
+  'i18n/pl.js',
+  'i18n/core.js',
+];
+for (const name of inputNames) inputs[name] = sha(await readFile(path.join(web, name)));
 for (const name of ['index.html', 'app.js', 'style.css'])
-  inputs[name] = sha(await readFile(path.join(web, name)));
-for (const name of ['app.js', 'style.css'])
   outputs[name] = sha(await readFile(path.join(dist, name)));
 await writeFile(
   path.join(dist, 'manifest.json'),

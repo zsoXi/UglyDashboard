@@ -1,5 +1,5 @@
 /** Starts scripts/browser_fixture.py and waits until it serves /health. */
-import { spawn } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -23,6 +23,9 @@ async function waitFor(url, timeoutMs) {
 }
 
 export default async function globalSetup() {
+  // The server serves the production dist bundle, so the browser suite must
+  // test a freshly built artifact instead of a stale one.
+  execSync('npm run build', { stdio: 'inherit' });
   for (const f of [INFO, PID]) {
     try {
       if (existsSync(f)) unlinkSync(f);

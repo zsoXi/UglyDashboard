@@ -2,6 +2,7 @@
 
 import copy
 import csv
+import hashlib
 import hmac
 import html
 import io
@@ -31,15 +32,51 @@ from .mcp import MCP
 from .oauth import OAuth
 
 WEB_DIR = PACKAGE_ROOT / "web"
+DIST_DIR = WEB_DIR / "dist"
+
+
+def _read_text(path, fallback=""):
+    try:
+        return path.read_text("utf-8")
+    except OSError:
+        LOG.warning("Missing web asset %s", path)
+        return fallback
 
 
 def _web_asset(name, fallback=""):
-    """Load a static asset from ``web/`` next to the launcher."""
+    """Load a static asset from ``web/`` next to the launcher (dev mode only)."""
+    return _read_text(WEB_DIR / name, fallback)
+
+
+def _dist_assets():
+    """Verified production assets from ``web/dist``.
+
+    Returns ``(assets, error)``. When the build is missing or does not match
+    its manifest, ``assets`` is ``None`` and ``error`` is a readable reason.
+    Sources in ``web/`` are never used as a silent fallback.
+    """
     try:
-        return (WEB_DIR / name).read_text("utf-8")
-    except OSError:
-        LOG.warning("Missing web asset %s", name)
-        return fallback
+        manifest = json.loads((DIST_DIR / "manifest.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return None, "The production frontend build is missing (web/dist/manifest.json)."
+    outputs = manifest.get("outputs") if isinstance(manifest, dict) else None
+    if not isinstance(outputs, dict) or not outputs:
+        return None, "The production frontend manifest is unreadable or incomplete."
+    assets = {}
+    for name, expected in outputs.items():
+        if name not in ("index.html", "app.js", "style.css"):
+            return None, f"The production manifest lists an unexpected asset: {name}."
+        try:
+            raw = (DIST_DIR / name).read_bytes()
+        except OSError:
+            return None, f"The production frontend is incomplete: web/dist/{name} is missing."
+        if hashlib.sha256(raw).hexdigest() != expected:
+            return None, f"The production frontend does not match its manifest: web/dist/{name}."
+        assets[name] = raw.decode("utf-8")
+    for name in ("index.html", "app.js", "style.css"):
+        if name not in assets:
+            return None, f"The production manifest is incomplete (missing {name})."
+    return assets, ""
 
 
 PAGE = _web_asset(
@@ -52,6 +89,20 @@ JS = _web_asset("app.js", "")
 CSS = _web_asset("style.css", "")
 # Exact-name allowlist for the offline i18n modules the page imports.
 I18N_ASSETS = {name: _web_asset("i18n/" + name, "") for name in ("en.js", "pl.js", "core.js")}
+
+BUILD_ERROR_PAGE = (
+    '<!doctype html><html lang="en"><meta charset="utf-8">'
+    "<title>Mission Control · build required</title>"
+    '<body style="font-family:system-ui;padding:2rem;max-width:44rem">'
+    "<h1>Production frontend not available</h1><p>__REASON__</p>"
+    "<p>Build the frontend with <code>npm run build</code> (Node.js required) "
+    "or reinstall the complete package that ships <code>web/dist</code>.</p>"
+    "</body></html>"
+)
+
+
+def build_error_page(reason):
+    return BUILD_ERROR_PAGE.replace("__REASON__", html.escape(reason or "Unknown build error."))
 
 
 class Server(ThreadingHTTPServer):
@@ -70,8 +121,19 @@ class Server(ThreadingHTTPServer):
                 pass
         super().server_bind()
 
-    def __init__(self, address, engine):
+    def __init__(self, address, engine, dev_web=False):
         self.engine = engine
+        self.dev_web = dev_web
+        if dev_web:
+            # Explicit development mode: serve the unbuilt sources.
+            self.assets = {"index.html": PAGE, "app.js": JS, "style.css": CSS}
+            self.asset_error = ""
+        else:
+            assets, error = _dist_assets()
+            self.assets = assets or {}
+            self.asset_error = error
+            if error:
+                LOG.warning("Production frontend unavailable: %s", error)
         self.oauth = OAuth(engine)
         self.mcp = MCP(engine)
         self.slots = threading.BoundedSemaphore(32)
@@ -358,16 +420,42 @@ class Handler(BaseHTTPRequestHandler):
             path = u.path
             q = {k: v[-1] for k, v in parse_qs(u.query, max_num_fields=30).items()}
             if path in ("/", "/index.html"):
-                self.send(200, PAGE, "text/html; charset=utf-8")
+                asset = self.server.assets.get("index.html")
+                if asset is None:
+                    # A readable instruction page instead of a blank error or a
+                    # silent fallback to the unbuilt sources.
+                    self.send(
+                        200,
+                        build_error_page(self.server.asset_error),
+                        "text/html; charset=utf-8",
+                    )
+                    return
+                self.send(200, asset, "text/html; charset=utf-8")
                 return
             if path == "/app.js":
-                self.send(200, JS, "application/javascript; charset=utf-8")
+                asset = self.server.assets.get("app.js")
+                if asset is None:
+                    self.send(
+                        503,
+                        {"error": self.server.asset_error or "Production frontend unavailable."},
+                    )
+                    return
+                self.send(200, asset, "application/javascript; charset=utf-8")
                 return
             if path == "/style.css":
-                self.send(200, CSS, "text/css; charset=utf-8")
+                asset = self.server.assets.get("style.css")
+                if asset is None:
+                    self.send(
+                        503,
+                        {"error": self.server.asset_error or "Production frontend unavailable."},
+                    )
+                    return
+                self.send(200, asset, "text/css; charset=utf-8")
                 return
             if path.startswith("/i18n/"):
-                asset = I18N_ASSETS.get(path[len("/i18n/") :])
+                # The dist bundle inlines the dictionaries; the allowlisted
+                # modules are only served by explicit development mode.
+                asset = I18N_ASSETS.get(path[len("/i18n/") :]) if self.server.dev_web else None
                 if asset:
                     self.send(200, asset, "text/javascript; charset=utf-8")
                 else:
