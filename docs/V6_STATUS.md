@@ -41,9 +41,28 @@ lokalnych danych użytkownika. Liczby pochodzą z `TEST_REPORT.json`
   `style.css`).
 - Przeglądarka: 38/38 na produkcyjnym `dist` (desktop + mobile).
 - MCP: 10/10. Migracja: 8/8. `scripts/check_secrets.py`: czysto.
-- Restart (dane rzeczywiste): trwałe checkpointy sesji Codex odtwarzają sumy
-  i sesje bez ponownego odczytu niezmienionych logów; test regresyjny
-  `test_restart_republishes_durable_checkpoints_without_recounting`.
+- Restart (dane rzeczywiste, 2026-09-17): trwałe checkpointy sesji Codex
+  odtwarzają sumy i sesje bez ponownego odczytu niezmienionych logów.
+  - Pełna skala (2 192 → 2 194 sesje): przed przerwaniem 254 404 119 600
+    (odczyt w toku); pierwszy snapshot po restarcie 252 241 696 868
+    z 2 192/2 192 sesjami odtworzonymi z trwałych checkpointów (99,15%
+    sumy częściowej); po zakończeniu wznowienia 256 187 084 501 przy
+    agregatach kompletnych; ponowny restart dał tę samą sumę — 0 sesji
+    ze zmienioną sumą.
+  - Zakres zamrożony (10 rzeczywistych plików rollout, 119,4 MB, sha256
+    w dowodach): pełny odczyt 344 632 181 → restart 344 632 181 →
+    ponowny restart 344 632 181; przerwanie w trakcie importu przy
+    152 840 456 — po wznowieniu 344 632 181 (różnica 0 wobec pełnego
+    odczytu tego samego zakresu).
+  - Wzór odbioru: `Zakres:` te same zdarzenia sprzed przerwania procesu;
+    `Suma przed przerwaniem:` 152 840 456 (zakres zamrożony, odczyt
+    w toku) / 254 404 119 600 (pełna skala, odczyt w toku);
+    `Suma po zakończonym wznowieniu:` 344 632 181 / 256 187 084 501;
+    `Różnica:` 0; `Kompletność agregatów dla tego zakresu:` complete;
+    `Ponowny restart:` bez zmiany sumy.
+  - Dowody poza repozytorium: snapshoty overview wszystkich faz, skrypty
+    odtworzenia i provenance plików (lokalny folder dowodów restartu).
+  - Test regresyjny: `test_restart_republishes_durable_checkpoints_without_recounting`.
 
 ## Benchmarki (syntetyczne, `scripts/benchmark_incremental.py`)
 
