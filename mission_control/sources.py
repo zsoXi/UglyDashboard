@@ -196,10 +196,15 @@ def read_opencode(path, limit=1000, budget_seconds=None):
                         f"SELECT * FROM part WHERE session_id=? ORDER BY {po} DESC LIMIT ?",
                         (s["native_id"], budget + 1),
                     )
+                older_cursor = None
                 if len(rows_p) > budget:
                     truncated = True
                     s["parts_truncated"] = True
                     rows_p = rows_p[:budget]
+                    if rows_p:
+                        older_cursor = (
+                            (rows_p[-1][po], rows_p[-1]["id"]) if has_part_id else len(rows_p)
+                        )
                 parts_total += len(rows_p)
                 for r in reversed(rows_p):
                     r = dict(r)
@@ -257,6 +262,68 @@ def read_opencode(path, limit=1000, budget_seconds=None):
                     elif typ == "retry":
                         s["retry_count"] += 1
                         add_event(s, "retry", str(d.get("error", "Retry")), ts, pid)
+                if older_cursor is not None:
+                    # Usage aggregates must not depend on the detail window: page
+                    # through the older parts with a usage-only read (no detail is
+                    # retained) so the session totals include every step-finish, not
+                    # only the newest MAX_OC_PARTS_PER_SESSION of them. Memory stays
+                    # bounded by the page size; the soft deadline bounds the work and
+                    # any remainder is reported as aggregate_truncated.
+                    cursor = older_cursor
+                    while True:
+                        if read_state["hit"] or time.monotonic() > deadline:
+                            s["_aggregate_truncated"] = True
+                            if read_state["hit"]:
+                                deadline_exceeded = True
+                            break
+                        if has_part_id:
+                            q = (
+                                f"SELECT * FROM part WHERE session_id=? AND "
+                                f"({po} < ? OR ({po} = ? AND id < ?)) "
+                                f"ORDER BY {po} DESC, id DESC LIMIT ?"
+                            )
+                            args = (
+                                s["native_id"],
+                                cursor[0],
+                                cursor[0],
+                                cursor[1],
+                                MAX_OC_PART_PAGE,
+                            )
+                        else:
+                            q = (
+                                f"SELECT * FROM part WHERE session_id=? "
+                                f"ORDER BY {po} DESC LIMIT ? OFFSET ?"
+                            )
+                            args = (s["native_id"], MAX_OC_PART_PAGE, cursor)
+                        page_rows = fetch(q, args)
+                        if not page_rows:
+                            break
+                        for raw in page_rows:
+                            r = dict(raw)
+                            d = obj(r.get("data"))
+                            if d.get("type") == "step-finish" and d.get("tokens"):
+                                ts = int(
+                                    number(
+                                        r.get("time_created")
+                                        or obj(d.get("time")).get("start")
+                                    )
+                                )
+                                mid = message_info.get(r.get("message_id"), {})
+                                record_usage(
+                                    s,
+                                    oc_usage(d["tokens"], diag),
+                                    ts,
+                                    mid.get("modelID"),
+                                    mid.get("providerID"),
+                                    d.get("cost"),
+                                )
+                        if len(page_rows) < MAX_OC_PART_PAGE:
+                            break
+                        if has_part_id:
+                            last = page_rows[-1]
+                            cursor = (last[po], last["id"])
+                        else:
+                            cursor += len(page_rows)
             if read_state["hit"]:
                 deadline_exceeded = True
                 break
@@ -302,8 +369,12 @@ def read_opencode(path, limit=1000, budget_seconds=None):
             s["events"] = s["events"][-120:]
             if s.get("parts_truncated"):
                 s["warnings"].append(
-                    "Part history capped at %d newest parts; usage may be incomplete."
-                    % MAX_OC_PARTS_PER_SESSION
+                    "Part detail history capped at %d newest parts; usage totals still "
+                    "include the older parts." % MAX_OC_PARTS_PER_SESSION
+                )
+            if s.get("_aggregate_truncated"):
+                s["warnings"].append(
+                    "Usage aggregate stopped at the read budget; older usage is still pending."
                 )
             if s.get("messages_truncated"):
                 s["warnings"].append(
@@ -314,17 +385,20 @@ def read_opencode(path, limit=1000, budget_seconds=None):
     truncated_sessions = sum(
         1 for s in result if s.get("parts_truncated") or s.get("messages_truncated")
     )
+    aggregate_truncated = sum(1 for s in result if s.get("_aggregate_truncated"))
     coverage = {
         "total_sessions": total,
         "loaded_sessions": len(result),
         "parts_loaded": parts_total,
         "truncated_sessions": truncated_sessions,
+        "aggregate_truncated_sessions": aggregate_truncated,
         "deadline_exceeded": deadline_exceeded,
         "truncated": bool(
             total > limit
             or truncated
             or parts_total >= MAX_OC_PARTS_TOTAL
             or deadline_exceeded
+            or aggregate_truncated
         ),
         "rejected_records": diag.snapshot(),
     }

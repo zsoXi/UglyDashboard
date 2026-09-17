@@ -94,6 +94,33 @@ class Store:
         except OSError as exc:
             raise SecretError(p, f"credential transaction failed ({exc})") from exc
 
+    def rotate_secret(self, name):
+        """Atomically replace ONE credential with a fresh value.
+
+        Used for owner-token rotation. Only the named file is touched: the
+        private database, the saved configuration and the other independent
+        credentials (mcp.token, pairing.key) are never modified. The previous
+        value is overwritten without a backup, so it stops being accepted the
+        next time a process reads this file; a dashboard that is already running
+        keeps the old token in memory until it is restarted.
+        """
+        if (
+            not isinstance(name, str)
+            or not name
+            or name in (".", "..")
+            or "/" in name
+            or chr(92) in name
+        ):
+            raise ValueError("Secret name must be a plain filename")
+        p = self.directory / name
+        try:
+            with secret_lock(p.with_name(name + ".lock")):
+                return self._create_secret(p, rotate=True)
+        except SecretError:
+            raise
+        except OSError as exc:
+            raise SecretError(p, f"credential rotation failed ({exc})") from exc
+
     @staticmethod
     def _read_secret(p):
         """Return the secret text, ``None`` if invalid, or raise on unreadable.
@@ -136,7 +163,7 @@ class Store:
                 ) from exc
         raise SecretError(p, "cannot preserve corrupt credential: backup names exhausted")
 
-    def _create_secret(self, p):
+    def _create_secret(self, p, rotate=False):
         value = secrets.token_urlsafe(36)
         tmp = p.with_name(f"{p.name}.tmp-{os.getpid()}-{secrets.token_hex(6)}")
         fd = None
@@ -147,6 +174,16 @@ class Store:
                 f.write(value + "\n")
                 f.flush()
                 os.fsync(f.fileno())
+            if rotate:
+                # Rotation must really invalidate the previous value: replace
+                # the destination atomically and keep no copy of the old secret.
+                try:
+                    os.replace(str(tmp), str(p))
+                except OSError as exc:
+                    raise SecretError(
+                        p, f"cannot rotate secret atomically ({exc.strerror or exc})"
+                    ) from exc
+                return value
             return self._publish_secret(tmp, p, value)
         except SecretError:
             raise

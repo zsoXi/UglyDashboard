@@ -439,7 +439,7 @@ class ReaderBoundsTests(Base):
         con.close()
         return str(db)
 
-    def test_part_paging_keeps_newest_and_reports_truncation(self):
+    def test_part_paging_caps_detail_but_totals_cover_all_parts(self):
         import mission_control.sources as sources_mod
 
         db = self.parts_db(12)
@@ -450,12 +450,17 @@ class ReaderBoundsTests(Base):
         ):
             rows, _, cov = m.read_opencode(db)
         self.assertEqual(len(rows), 1)
-        # Newest five parts are i=7..11 exactly once each.
-        self.assertEqual(rows[0]["usage"]["total"], 545)
+        # Detail history still keeps only the newest five parts (i=7..11)...
         self.assertTrue(rows[0].get("parts_truncated"))
+        # ...but the usage aggregate must cover every step-finish part
+        # (i=0..11 -> 12*100 + 66 = 1266). The old expectation (545) encoded the
+        # silent 174,609,418-token undercount proven by the uncapped
+        # reconciliation in docs/V6_RECONCILIATION.md.
+        self.assertEqual(rows[0]["usage"]["total"], 1266)
         self.assertTrue(cov["truncated"])
         self.assertEqual(cov["parts_loaded"], 5)
         self.assertEqual(cov["truncated_sessions"], 1)
+        self.assertEqual(cov["aggregate_truncated_sessions"], 0)
         self.assertIn("rejected_records", cov)
 
     def test_coverage_reports_rejected_records(self):

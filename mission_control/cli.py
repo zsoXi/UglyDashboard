@@ -211,6 +211,23 @@ def builtin_self_test():
     return 0 if result.wasSuccessful() else 1
 
 
+def rotate_owner_token(directory):
+    """Rotate only the owner credential in a state dir (no server is started)."""
+    from .store import Store
+
+    with Store(directory) as store:
+        store.rotate_secret("owner.token")
+        location = str(store.directory)
+    print(
+        "Owner token rotated in "
+        + location
+        + ". The previous token stops working once a dashboard is restarted; "
+        "start it with --open to receive the new one. The database, "
+        "configuration, mcp.token and pairing.key were not modified."
+    )
+    return 0
+
+
 def _reusable_instance(port, token):
     """True only for a healthy Mission Control app that accepts our owner token."""
     try:
@@ -302,10 +319,18 @@ def main():
         action="store_true",
         help="Run built-in offline sanity tests without reading user data.",
     )
+    parser.add_argument(
+        "--rotate-owner-token",
+        action="store_true",
+        help="Rotate only the owner token in the state dir and exit. The database, "
+        "configuration, mcp.token and pairing.key are preserved.",
+    )
     parser.add_argument("--version", action="version", version=VERSION)
     args = parser.parse_args()
     if args.self_test:
         return builtin_self_test()
+    if args.rotate_owner_token:
+        return rotate_owner_token(args.state_dir)
     if args.mcp_stdio:
         return stdio_bridge(args.state_dir)
     if args.report_event:

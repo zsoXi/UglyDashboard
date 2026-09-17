@@ -202,6 +202,7 @@ interface SourceStatus {
   total_sessions?: number;
   parts_loaded?: number;
   truncated_sessions?: number;
+  aggregate_truncated_sessions?: number;
   loaded_files?: number;
   truncated?: boolean;
   deadline_exceeded?: boolean;
