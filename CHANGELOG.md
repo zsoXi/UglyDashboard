@@ -73,9 +73,30 @@ isolated V6 worktree; the running v5 instance was not modified.
   allowlist, rate limits, CSP and owner-only reveal intact;
   `--rotate-owner-token` remains the controlled rotation procedure.
 
+### Incremental read correctness (E.7)
+
+- Durable Codex checkpoints now store `mtime_ns`, the reader offset and the
+  file identity: a rewrite that keeps the byte size is detected by its changed
+  mtime and re-read (after the next poll and after a restart alike), and a
+  restored reader continues from the durable offset while the checkpoint keeps
+  the cumulative counter, so appended cumulative readings apply as deltas
+  without double counting.
+- A file changed beyond the one-cycle read budget is still published from its
+  last known snapshot and remains flagged pending: completeness is computed
+  against the live file state, so a batched cycle can no longer hide changed
+  sessions behind `aggregates_complete`.
+- OpenCode aggregates re-verify completed sessions with a revision (row count,
+  `MAX(rowid)`, total payload bytes, newest key) plus a bounded content probe of
+  the newest rows; an in-place edit that keeps the row count and byte totals is
+  re-aggregated instead of trusted. The residual limit for edits buried in
+  older rows is documented in `docs/V6_COVERAGE.md`, not silently ignored.
+- Period breakdowns built on evicted detail (the per-session `usage_events`
+  cap) are partial by design and labelled as such; they are not presented as
+  full analytics.
+
 ### Numbers
 
-- Python: 189 tests, 0 failures, 2 environmental skips, 0 ResourceWarnings.
+- Python: 195 tests, 0 failures, 2 environmental skips, 0 ResourceWarnings.
 - Browser: Playwright 38/38 on the production `dist`.
 - Benchmarks (expectations from the generator): 1000 sessions / 100k events =
   12 347 213 tokens exact, full coverage 10.6 s (1 cycle); 1000 sessions /

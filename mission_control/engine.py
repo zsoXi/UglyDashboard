@@ -286,26 +286,41 @@ def codex_session_payload(s):
     analytics stay identical to the pre-restart state.
     """
     return {
-        k: copy.deepcopy(v) for k, v in s.items() if not k.startswith("_") and k != "events"
+        k: copy.deepcopy(v)
+        for k, v in s.items()
+        if (k == "_cumulative" or not k.startswith("_")) and k != "events"
     }
 
 
-def _restore_codex_item(path, payload):
-    """Rebuild a cached Codex item from a durable checkpoint payload.
+def _restore_codex_item(path, saved):
+    """Rebuild a cached Codex item from a durable checkpoint.
 
-    Returns ``None`` when the checkpoint does not carry a usable payload (an
-    older state, or a file that never finished a read), in which case the file
-    is read again instead of publishing invented totals. A restored session has
-    never been read by this process, so the marker makes the read path rebuild
-    it from zero before applying any records.
+    Returns ``None`` when the checkpoint does not carry a usable session
+    payload (an older state, or a file that never finished a read), in which
+    case the file is read again instead of publishing invented totals. When
+    the checkpoint also carries the reader position, the restored reader
+    continues from there so an appended file applies only its new records;
+    checkpoints without a position fall back to a full read (the reader
+    detects the missing identity and resets).
     """
+    payload = saved.get("session") if isinstance(saved, dict) else None
     if not isinstance(payload, dict) or not payload.get("usage"):
         return None
     s = make_session("codex", Path(path).stem)
     for key, value in payload.items():
         s[key] = copy.deepcopy(value)
     s["usage_known"] = bool(s.get("usage_known") or s["usage"].get("total"))
-    return {"reader": JsonlReader(), "session": s, "restored": True}
+    reader = JsonlReader()
+    offset = saved.get("offset")
+    if isinstance(offset, int) and offset > 0:
+        reader.offset = offset
+        identity = saved.get("identity")
+        if isinstance(identity, (list, tuple)) and len(identity) == 2:
+            reader.identity = (identity[0], identity[1])
+        mtime_ns = saved.get("mtime_ns")
+        if isinstance(mtime_ns, int):
+            reader.mtime = mtime_ns
+    return {"reader": reader, "session": s}
 
 
 COVERAGE_COMPLETE = "complete"
@@ -984,37 +999,48 @@ class Engine:
         total_files = len(all_files)
         batch = max(1, int(cfg["codex_file_limit"]))
         start = (int(self.store.setting("codex_cursor", 0) or 0)) % total_files if total_files else 0
+        stats = {}
         files = []
         reuse = []
-        next_index = start
+        over = []
+        last_read_index = None
         for offset in range(total_files):
             index = (start + offset) % total_files
             path = all_files[index]
             try:
-                size = Path(path).stat().st_size
+                stat = Path(path).stat()
+                size, mtime_ns = stat.st_size, stat.st_mtime_ns
             except OSError:
-                next_index = (index + 1) % total_files
                 continue
+            stats[path] = (size, mtime_ns)
             saved = done_checkpoints.get(path) or {}
             restorable = isinstance(saved.get("session"), dict)
-            if (
+            unchanged = (
                 saved.get("complete")
                 and int(saved.get("size") or -1) == size
-                and (path in self.codex_cache or restorable)
-            ):
+                and saved.get("mtime_ns") is not None
+                and int(saved.get("mtime_ns") or 0) == mtime_ns
+            )
+            if unchanged and (path in self.codex_cache or restorable):
                 # Already aggregated and unchanged: publish the session from the
                 # cache or from the durable checkpoint payload instead of
                 # re-reading the file, so the snapshot keeps every processed
                 # Codex session (also across restarts) while the batch rotates.
                 reuse.append(path)
-                next_index = (index + 1) % total_files
                 continue
-            files.append(path)
-            next_index = (index + 1) % total_files
-            if len(files) >= batch:
-                break
+            if len(files) < batch:
+                files.append(path)
+                last_read_index = index
+            else:
+                # The file changed but this cycle's read budget is spent. It must
+                # still be published from its last known payload, and its
+                # completeness must not be claimed until the change is read.
+                over.append(path)
         if total_files:
-            self.store.set_setting("codex_cursor", next_index)
+            self.store.set_setting(
+                "codex_cursor",
+                (last_read_index + 1) % total_files if last_read_index is not None else start,
+            )
         codex_source = {
             "id": "codex-logs",
             "label": "Codex session logs",
@@ -1038,11 +1064,7 @@ class Engine:
                     path,
                     {"reader": JsonlReader(), "session": make_session("codex", Path(path).stem)},
                 )
-                if item.pop("restored", False):
-                    # A restored session was never read here and the fresh
-                    # reader starts at offset zero: rebuild it from zero so the
-                    # cumulative deltas are applied exactly once.
-                    item["session"] = make_session("codex", Path(path).stem)
+                item.pop("restored", False)
                 reader = item["reader"]
                 records = reader.read(path)
                 if reader.reset:
@@ -1071,12 +1093,10 @@ class Engine:
                 problems.append(redact(str(path) + ": " + str(e), 220))
         # Release old file caches; history is rebuilt if they enter the selected window again.
         self.codex_cache = {p: v for p, v in self.codex_cache.items() if p in set(all_files)}
-        for path in reuse:
+        for path in reuse + over:
             item = self.codex_cache.get(path)
             if not item:
-                item = _restore_codex_item(
-                    path, (done_checkpoints.get(path) or {}).get("session")
-                )
+                item = _restore_codex_item(path, done_checkpoints.get(path) or {})
                 if item is None:
                     continue
                 self.codex_cache[path] = item
@@ -1092,27 +1112,40 @@ class Engine:
             if not item:
                 continue
             try:
-                size = Path(path).stat().st_size
+                stat = Path(path).stat()
             except OSError:
                 continue
-            complete = item["reader"].offset >= size
-            data = {"size": size, "complete": complete}
+            complete = item["reader"].offset >= stat.st_size
+            data = {"size": stat.st_size, "complete": complete}
             if complete:
                 # Keep the processed session itself in the durable checkpoint so
                 # a restart can publish every accounted Codex session without
                 # re-reading unchanged logs and without inventing totals.
                 data["session"] = codex_session_payload(item["session"])
+                data["mtime_ns"] = stat.st_mtime_ns
+                data["offset"] = item["reader"].offset
+                if item["reader"].identity:
+                    data["identity"] = list(item["reader"].identity)
             updates[path] = data
         if updates:
             self.store.put_checkpoints("codex", list(updates.items()))
         done_checkpoints.update(updates)
-        files_complete = sum(
-            1 for path in all_files if (done_checkpoints.get(path) or {}).get("complete")
-        )
+        files_complete = 0
+        for path in all_files:
+            cp = done_checkpoints.get(path) or {}
+            stat_pair = stats.get(path)
+            if (
+                cp.get("complete")
+                and stat_pair is not None
+                and cp.get("size") == stat_pair[0]
+                and cp.get("mtime_ns") is not None
+                and cp.get("mtime_ns") == stat_pair[1]
+            ):
+                files_complete += 1
         pending_files = max(0, int(coverage.get("files_found") or 0) - files_complete)
         codex_source.update(
             files_found=int(coverage.get("files_found") or 0),
-            loaded_files=len(files) + len(reuse),
+            loaded_files=len(files) + len(reuse) + len(over),
             files_complete=files_complete,
             pending_files=pending_files,
             aggregates_complete=pending_files == 0,

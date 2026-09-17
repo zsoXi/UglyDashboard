@@ -9,6 +9,7 @@ unchanged logs.
 """
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -29,6 +30,18 @@ def _usage(total):
         "reasoning_output_tokens": 0,
         "total_tokens": total,
     }
+
+
+def _append_token(path, amount, stamp):
+    line = json.dumps(
+        {
+            "timestamp": stamp,
+            "type": "event_msg",
+            "payload": {"type": "token_count", "info": {"total_token_usage": _usage(amount)}},
+        }
+    ) + "\n"
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(line)
 
 
 def _write_session(home, session_id, total_tokens, created, when):
@@ -166,6 +179,92 @@ class CodexIncrementalTests(unittest.TestCase):
         restarted.poll()
         self.assertEqual(len(restarted.view()["sessions"]), FILE_COUNT)
         self.assertEqual(self._tokens(restarted), expected)
+
+    def test_append_over_batch_keeps_every_session_and_flags_pending(self):
+        engine = self._engine(limit=SMALL_BATCH)
+        for _ in range(8):
+            engine.poll()
+            if self._codex_source(engine)["aggregates_complete"]:
+                break
+        self.assertEqual(self._tokens(engine), _expected_tokens())
+        engine.store.set_setting("codex_cursor", 0)
+        logs = self.root / "codex-home" / "sessions" / "2026" / "09" / "17"
+        for index in range(FILE_COUNT):
+            _append_token(
+                str(logs / ("rollout-cx-%02d-%02d.jsonl" % (index, index))),
+                1100 + index * 10,
+                1_700_000_000 + index * 100 + 5000 + index,
+            )
+        engine.poll()
+        source = self._codex_source(engine)
+        sessions = {session["id"] for session in engine.view()["sessions"]}
+        missing = sorted(
+            "codex:cx-%02d" % index
+            for index in range(FILE_COUNT)
+            if ("codex:cx-%02d" % index) not in sessions
+        )
+        self.assertEqual(missing, [])
+        self.assertEqual(len(sessions), FILE_COUNT)
+        self.assertEqual(source["files_complete"], SMALL_BATCH)
+        self.assertEqual(source["pending_files"], FILE_COUNT - SMALL_BATCH)
+        self.assertFalse(source["aggregates_complete"])
+        self.assertGreaterEqual(source["catching_up"], FILE_COUNT - SMALL_BATCH)
+        for _ in range(2):
+            engine.poll()
+            if self._codex_source(engine)["aggregates_complete"]:
+                break
+        self.assertTrue(self._codex_source(engine)["aggregates_complete"])
+        self.assertEqual(
+            self._tokens(engine), sum(1100 + index * 10 for index in range(FILE_COUNT))
+        )
+
+    def test_same_size_rewrite_is_re_read_after_poll_and_restart(self):
+        home = str(self.root / "codex-home")
+        path = _write_session(home, "same-size", 100, 1_700_000_000, "fixed")
+        engine = mc.Engine(self.root / "state", self._config(limit=SMALL_BATCH))
+        self.addCleanup(engine.close)
+        engine.poll()
+        self.assertEqual(self._tokens(engine), 100)
+        _write_session(home, "same-size", 900, 1_700_000_000, "fixed")
+        stat = os.stat(path)
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 100_000_000))
+        engine.poll()
+        self.assertEqual(self._tokens(engine), 900)
+        self.assertTrue(self._codex_source(engine)["aggregates_complete"])
+        engine.close()
+        restarted = mc.Engine(self.root / "state", self._config(limit=SMALL_BATCH))
+        self.addCleanup(restarted.close)
+        restarted.poll()
+        self.assertEqual(self._tokens(restarted), 900)
+        self.assertTrue(self._codex_source(restarted)["aggregates_complete"])
+
+    def test_restored_reader_continues_where_the_checkpoint_stopped(self):
+        home = str(self.root / "codex-home")
+        path = _write_session(home, "growing", 100, 1_700_000_000, "big")
+        filler = json.dumps({"type": "padding", "payload": {"text": "x" * 524288}}) + "\n"
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(filler * 34)
+        _append_token(path, 200, 1_700_000_600)
+        engine = mc.Engine(self.root / "state", self._config(limit=SMALL_BATCH))
+        self.addCleanup(engine.close)
+        for _ in range(6):
+            engine.poll()
+            if self._codex_source(engine)["aggregates_complete"]:
+                break
+        self.assertEqual(self._tokens(engine), 200)
+        engine.close()
+        size = path.stat().st_size
+        restarted = mc.Engine(self.root / "state", self._config(limit=SMALL_BATCH))
+        self.addCleanup(restarted.close)
+        restarted.poll()
+        self.assertEqual(self._tokens(restarted), 200)
+        self.assertEqual(restarted.codex_cache[str(path)]["reader"].offset, size)
+        _append_token(path, 300, 1_700_000_700)
+        restarted.poll()
+        self.assertEqual(self._tokens(restarted), 300)
+        self.assertEqual(restarted.codex_cache[str(path)]["reader"].offset, path.stat().st_size)
+        restarted.poll()
+        self.assertEqual(self._tokens(restarted), 300)
 
 
 if __name__ == "__main__":

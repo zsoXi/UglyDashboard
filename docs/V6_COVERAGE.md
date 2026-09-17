@@ -49,6 +49,32 @@ Usage is normalized into one record shape:
   benchmark fixture, session aggregates are complete for 1000/1000 sessions
   while only 148 sessions have full details in the window. This is reported,
   not hidden.
+* Period breakdowns inherit the same bound: when events were evicted
+  (`detail_events_evicted` above zero, the per-session `usage_events` cap is
+  4000), the `daily` breakdown is partial by design. A period report built on
+  evicted detail is incomplete analytics, and the coverage block says so
+  instead of hiding it.
+
+## Source mutation contracts
+
+How a source's changes are detected, and what is explicitly outside the
+contract:
+
+* Codex logs: a file is republished without a re-read only when its checkpoint
+  is complete and both its byte size and `mtime_ns` still match. A rewrite that
+  keeps the byte size is therefore detected by its changed mtime; checkpoints
+  written before mtime tracking existed are re-read once and then re-verified
+  like any other. A restored reader continues from the durable offset and the
+  checkpoint keeps the cumulative counter (`_cumulative`), so appended
+  cumulative readings apply as deltas without double counting.
+* OpenCode parts: part rows are treated as append-only. Completed sessions are
+  re-verified with a revision (row count, `MAX(rowid)`, total payload bytes,
+  `MAX(time_created)`) plus a bounded content probe of the newest up to four
+  rows (head and tail 80 bytes each). An in-place edit of an older row that
+  leaves the row count, the byte totals and the probed rows unchanged stays
+  outside this contract and may remain invisible until the row count or byte
+  totals move. That residual limit is by design and documented here, not
+  silently trusted.
 
 ## The coverage block
 
@@ -125,3 +151,9 @@ estimate, not measured per-file usage.
 Regression coverage: `tests/test_v6_coverage.py` (8 tests) verifies the
 contract, including `history_limited`, the three-state conclusions, `null`
 instead of fake zero, scoped breakdowns, range precision and CSV/MCP parity.
+`tests/test_v6_codex_incremental.py` adds the batched-append cases (a file
+changed beyond the read budget stays published and flagged pending; a rewrite
+of the same size is re-read after the next poll and after a restart; a restored
+reader continues from the durable offset). `tests/test_v6_opencode_revision.py`
+covers the revision and content probe: an in-place edit that keeps the length
+is re-aggregated, and an appended row still resumes from the stored cursor.

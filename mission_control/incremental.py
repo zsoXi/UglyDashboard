@@ -51,6 +51,38 @@ def _max_key(con, native_id):
     return _key(row) if row is not None else None
 
 
+def _part_revision(con, native_id):
+    """Row-count-independent identity of a session's part rows.
+
+    Counting rows alone cannot see an in-place edit that keeps the row count
+    and byte totals (a corrected payload of the same length), so the newest
+    rows are also probed by content. The probe is bounded and honest about
+    what it covers: the last few rows are compared head-to-tail, and edits
+    buried inside older rows stay outside the contract.
+    """
+    row = con.execute(
+        "SELECT COUNT(*), COALESCE(MAX(rowid),0), "
+        "COALESCE(SUM(LENGTH(CAST(data AS BLOB))),0), COALESCE(MAX(time_created),0) "
+        "FROM part WHERE session_id=?",
+        (native_id,),
+    ).fetchone()
+    tail = con.execute(
+        "SELECT id, time_created, LENGTH(CAST(data AS BLOB)), "
+        "SUBSTR(data, 1, 80), SUBSTR(data, -80) FROM part WHERE session_id=? "
+        "ORDER BY time_created DESC, id DESC LIMIT 4",
+        (native_id,),
+    ).fetchall()
+    probe = [
+        [str(item[0]), int(item[1] or 0), int(item[2] or 0), str(item[3]), str(item[4])]
+        for item in tail
+    ]
+    return (
+        int(row[0] or 0),
+        [int(row[1] or 0), int(row[2] or 0), int(row[3] or 0)],
+        probe,
+    )
+
+
 def aggregate_session(con, native_id, checkpoint, deadline, commit, page=MAX_OC_PART_PAGE):
     """Aggregate one session's token usage across ALL of its parts.
 
@@ -174,16 +206,16 @@ def aggregate_source(con, sessions, checkpoints, deadline, commit, state=None):
         visited += 1
         current = checkpoints.get(native_id) or empty_checkpoint()
         if current.get("complete"):
-            # Completed sessions are re-verified cheaply: only an unchanged
-            # part count may be skipped. Appends grow the count and rewrites
-            # shrink it, so aggregate_session can resume or reset correctly.
-            present = int(
-                con.execute(
-                    "SELECT COUNT(*) FROM part WHERE session_id=?", (native_id,)
-                ).fetchone()[0]
-            )
+            # Completed sessions are re-verified cheaply, but a row count alone
+            # cannot see an in-place edit that keeps the number of rows and the
+            # byte totals: the stored revision and content probe must match too.
+            # A mismatch re-aggregates from the start instead of trusting a sum
+            # over changed evidence.
+            present, revision, probe = _part_revision(con, native_id)
             if present == int(current.get("parts") or 0):
-                continue
+                if current.get("revision") == revision and current.get("probe") == probe:
+                    continue
+                current = empty_checkpoint()
         final = aggregate_session(
             con,
             native_id,
@@ -191,6 +223,14 @@ def aggregate_source(con, sessions, checkpoints, deadline, commit, state=None):
             deadline,
             lambda st, _sid=native_id: commit(_sid, st),
         )
+        if final.get("complete"):
+            # Keep the revision and the bounded content probe of the evidence
+            # the sum was computed over, so the next visit can skip only when
+            # the stored rows still match.
+            _, revision, probe = _part_revision(con, native_id)
+            final["revision"] = revision
+            final["probe"] = probe
+            commit(native_id, final)
         checkpoints[native_id] = final
     state["next_index"] = index
     return {
