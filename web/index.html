@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f6f2" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111416" />
+    <meta
+      name="description"
+      content="Local observability dashboard for OpenCode, Codex and MCP agents. Real sources, readable picture of the work."
+    />
+    <title data-i18n="app.title">UglyDashboard · Mission Control</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%23c4ee97'/%3E%3Cpath d='m12 16 12-6 12 6-12 6-12-6Zm0 8 12 6 12-6m-24 8 12 6 12-6' fill='none' stroke='%23131617' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content" data-i18n="skip.link">Skip to content</a>
+    <div class="app">
+      <aside class="sidebar" id="sidebar" aria-label="Main navigation" data-i18n-aria="nav.aria">
+        <button
+          type="button"
+          class="brand"
+          data-view="overview"
+          aria-label="UglyDashboard — overview"
+          data-i18n-aria="brand.aria"
+        >
+          <span class="brandmark"
+            ><svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5" /></svg
+          ></span>
+          <span class="brandtext" data-i18n-skip
+            >ugly<span class="brand-dot">.</span>dashboard<small data-i18n="brand.sub"
+              >MISSION CONTROL</small
+            ></span
+          >
+        </button>
+        <div class="workspace-switch" aria-label="Local workspace" data-i18n-aria="workspace.aria">
+          <span class="workspace-icon"
+            ><svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6Z" />
+              <path d="m8 12 3 3 5-6" /></svg
+          ></span>
+          <span
+            ><span data-i18n="workspace.label">Local workspace</span
+            ><small data-i18n="workspace.note">Your sources. Your rules.</small></span
+          >
+          <span class="workspace-tag" data-i18n="workspace.tag">LOCAL</span>
+        </div>
+        <div class="navlabel" data-i18n="nav.section.operations">OPERATIONS</div>
+        <nav class="nav" aria-label="Operations" data-i18n-aria="nav.operations.aria">
+          <button type="button" data-view="overview" class="active" aria-current="page">
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="3" y="3" width="7" height="7" rx="1.5" />
+              <rect x="14" y="3" width="7" height="7" rx="1.5" />
+              <rect x="3" y="14" width="7" height="7" rx="1.5" />
+              <rect x="14" y="14" width="7" height="7" rx="1.5" /></svg
+            ><span data-i18n="nav.overview">Overview</span>
+          </button>
+          <button type="button" data-view="projects">
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path
+                d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"
+              />
+              <path d="M3 11h18" /></svg
+            ><span data-i18n="nav.projects">Projects</span
+            ><span class="count" id="nav-projects">0</span>
+          </button>
+          <button type="button" data-view="agents">
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="4" y="6" width="16" height="14" rx="4" />
+              <path d="M12 3v3M1 11v4m22-4v4M8 15h8" />
+              <path d="M8 10h.01M16 10h.01" stroke-width="3" /></svg
+            ><span data-i18n="nav.agents">Agents &amp; sessions</span
+            ><span class="count" id="nav-agents">0</span>
+          </button>
+          <button type="button" data-view="graph">
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="9" y="2" width="6" height="5" rx="1" />
+              <rect x="2" y="17" width="6" height="5" rx="1" />
+              <rect x="16" y="17" width="6" height="5" rx="1" />
+              <path d="M12 7v5M5 17v-5h14v5" /></svg
+            ><span data-i18n="nav.graph">Team graph</span>
+          </button>
+          <button type="button" data-view="timeline">
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M8 4h13M8 12h13M8 20h13" />
+              <circle cx="3" cy="4" r="1" />
+              <circle cx="3" cy="12" r="1" />
+              <circle cx="3" cy="20" r="1" /></svg
+            ><span data-i18n="nav.timeline">Event stream</span>
+          </button>
+          <button type="button" data-view="analytics">
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 3v18h18M9 16v-5m5 5V7m5 9V3" /></svg
+            ><span data-i18n="nav.analytics">Models &amp; usage</span>
+          </button>
+          <button type="button" data-view="alerts">
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 3 2.5 20h19Z" stroke-linejoin="round" />
+              <path d="M12 9v5m0 3h.01" /></svg
+            ><span data-i18n="nav.alerts">Needs attention</span
+            ><span class="count" id="nav-alerts">0</span>
+          </button>
+        </nav>
+        <div class="navlabel system-label" data-i18n="nav.section.system">SYSTEM</div>
+        <nav class="nav" aria-label="System" data-i18n-aria="nav.system.aria">
+          <button type="button" data-view="integrations">
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path
+                d="m8 3 5 5m3-3 5 5M12 3l9 9M3 21l6-6M7 9l8 8m-7-9-3 3a5 5 0 0 0 7 7l3-3"
+              /></svg
+            ><span data-i18n="nav.integrations">Sources &amp; MCP</span>
+          </button>
+          <button type="button" data-view="settings">
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 6h16M4 12h16M4 18h16" />
+              <circle cx="9" cy="6" r="2" fill="var(--side)" />
+              <circle cx="16" cy="12" r="2" fill="var(--side)" />
+              <circle cx="8" cy="18" r="2" fill="var(--side)" /></svg
+            ><span data-i18n="nav.settings">Settings</span>
+          </button>
+        </nav>
+        <div class="sidefoot">
+          <div class="observer-card">
+            <div class="footstatus">
+              <span class="dot off" id="side-dot"></span
+              ><span id="side-state" data-i18n="side.connecting">Connecting…</span>
+            </div>
+            <p data-i18n-html="side.footer.html">
+              Statuses always carry evidence.<br />No invented workers.
+            </p>
+          </div>
+          <div class="versionline">
+            <span data-i18n="version.line">MISSION CONTROL</span
+            ><span class="version-tag" data-i18n="version.tag">v6.0</span>
+          </div>
+        </div>
+      </aside>
+      <button
+        type="button"
+        class="sidebar-scrim"
+        id="sidebar-scrim"
+        aria-label="Close navigation"
+        data-i18n-aria="sidebar.close.aria"
+        hidden
+      ></button>
+      <main class="main" id="main-content" tabindex="-1">
+        <header class="topbar">
+          <button
+            type="button"
+            class="iconbutton mobile-menu"
+            id="menu-toggle"
+            aria-label="Open navigation"
+            data-i18n-aria="topbar.menu.open"
+            aria-controls="sidebar"
+            aria-expanded="false"
+          >
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <div class="breadcrumb">
+            <span class="breadcrumb-root" data-i18n="topbar.breadcrumb">Workspace</span
+            ><svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m9 5 7 7-7 7" /></svg
+            ><b id="crumb">Overview</b>
+          </div>
+          <div class="topright">
+            <div class="connection" role="status">
+              <span class="dot off" id="status-dot"></span
+              ><span id="connection">Connecting to server</span>
+            </div>
+            <div class="top-divider"></div>
+            <button
+              type="button"
+              class="iconbutton langbutton"
+              id="lang"
+              title="Change language (English / Polski)"
+              data-i18n-title="topbar.lang.title"
+              aria-label="Change language (English / Polski)"
+              data-i18n-aria="topbar.lang.aria"
+            >
+              <span id="lang-code">EN</span>
+            </button>
+            <button
+              type="button"
+              class="iconbutton"
+              id="theme"
+              title="Toggle light / dark theme"
+              data-i18n-title="topbar.theme.title"
+              aria-label="Toggle theme"
+              data-i18n-aria="topbar.theme.aria"
+            >
+              <svg
+                class="icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.65"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="4" />
+                <path
+                  d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="iconbutton"
+              id="notify"
+              title="Enable browser notifications"
+              data-i18n-title="topbar.notify.title"
+              aria-label="Notifications"
+              data-i18n-aria="topbar.notify.aria"
+            >
+              <svg
+                class="icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.65"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="iconbutton"
+              id="refresh"
+              title="Request a fresh source read"
+              data-i18n-title="topbar.refresh.title"
+              aria-label="Refresh sources"
+              data-i18n-aria="topbar.refresh.aria"
+            >
+              <svg
+                class="icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.65"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M20 7v5h-5M4 17v-5h5" />
+                <path d="M6.5 5.5a8 8 0 0 1 13 5M4.5 13.5a8 8 0 0 0 13 5" />
+              </svg>
+            </button>
+          </div>
+        </header>
+        <div class="loadingbar" id="loadingbar" aria-hidden="true"></div>
+        <div class="content">
+          <div class="pagehead">
+            <div>
+              <p class="eyebrow" id="eyebrow">YOUR WORKSPACE / AT A GLANCE</p>
+              <h1 id="heading">Operations center</h1>
+              <p class="subtitle" id="subtitle">
+                Every project. Every agent. One clear picture of the work.
+              </p>
+            </div>
+            <div class="page-actions">
+              <span class="viewtag" id="viewtag">OBSERVER MODE</span>
+              <button type="button" class="primary connect-button" data-view="integrations">
+                <svg
+                  class="icon"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.65"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M12 5v14M5 12h14" /></svg
+                ><span data-i18n="page.connect">Connect sources</span>
+              </button>
+            </div>
+          </div>
+          <div class="filters" id="filters">
+            <label class="search-wrap"
+              ><svg
+                class="icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.65"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="10.5" cy="10.5" r="6.5" />
+                <path d="m16 16 4.5 4.5" /></svg
+              ><input
+                type="search"
+                id="search"
+                placeholder="Search agent, model, project…"
+                data-i18n-placeholder="filters.search.placeholder"
+                aria-label="Search sessions"
+                data-i18n-aria="filters.search.aria"
+              /><kbd aria-hidden="true">/</kbd></label
+            >
+            <select
+              id="project-filter"
+              aria-label="Project filter"
+              data-i18n-aria="filters.project.aria"
+            >
+              <option value="" data-i18n="filters.project.all">All projects</option>
+            </select>
+            <select
+              id="source-filter"
+              aria-label="Source filter"
+              data-i18n-aria="filters.source.aria"
+            >
+              <option value="" data-i18n="filters.source.all">All sources</option>
+              <option value="opencode" data-i18n="source.opencode">OpenCode</option>
+              <option value="codex" data-i18n="source.codex">Codex</option>
+              <option value="reported" data-i18n="source.reported">MCP reports</option>
+            </select>
+            <select id="state-filter" aria-label="State filter" data-i18n-aria="filters.state.aria">
+              <option value="" data-i18n="filters.state.all">All states</option>
+              <option value="active" data-i18n="filters.state.active">Active, any evidence</option>
+              <option value="verified" data-i18n="filters.state.verified">Active, verified</option>
+              <option value="running" data-i18n="state.running">Running</option>
+              <option value="tool" data-i18n="state.tool">Tool</option>
+              <option value="idle" data-i18n="state.idle">Idle</option>
+              <option value="waiting" data-i18n="state.waiting">Waiting</option>
+              <option value="retry" data-i18n="state.retry">Retry</option>
+              <option value="done" data-i18n="state.done">Done</option>
+              <option value="error" data-i18n="state.error">Error</option>
+              <option value="stale" data-i18n="state.stale">Stale</option>
+              <option value="unknown" data-i18n="state.unknown">Unknown</option>
+            </select>
+            <button
+              type="button"
+              class="reset"
+              id="reset-filters"
+              title="Clear filters"
+              data-i18n-title="filters.reset.title"
+              data-i18n="filters.reset"
+            >
+              Clear
+            </button>
+          </div>
+          <div id="view" aria-live="off">
+            <div class="loading">
+              <span class="loading-orbit" aria-hidden="true"></span
+              ><span data-i18n="loading.sources">Reading your sources…</span>
+            </div>
+          </div>
+          <footer class="content-foot">
+            <span
+              ><svg
+                class="icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.65"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6Z" />
+                <path d="m8 12 3 3 5-6" />
+              </svg>
+              <span data-i18n="footer.local">LOCAL DATA · EXPLICIT SOURCES</span></span
+            ><span data-i18n="footer.version">UglyDashboard / Mission Control 6.0</span>
+          </footer>
+        </div>
+      </main>
+    </div>
+    <dialog class="drawer" id="inspector" aria-labelledby="inspector-title">
+      <header class="drawerhead">
+        <div>
+          <p class="eyebrow" data-i18n="inspector.eyebrow">AGENT INSPECTOR</p>
+          <h2 id="inspector-title" data-i18n="inspector.title">Session details</h2>
+        </div>
+        <button
+          type="button"
+          class="iconbutton"
+          id="close-inspector"
+          aria-label="Close inspector"
+          data-i18n-aria="inspector.close.aria"
+        >
+          <svg
+            class="icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.65"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m6 6 12 12M6 18 18 6" />
+          </svg>
+        </button>
+      </header>
+      <div class="drawerbody" id="inspector-body"></div>
+    </dialog>
+    <div class="toaststack" id="toasts" aria-live="polite" aria-atomic="false"></div>
+    <div class="logincover" id="login" hidden>
+      <section class="authbox" aria-label="Owner sign-in" data-i18n-aria="login.aria">
+        <span class="brandmark"
+          ><svg
+            class="icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.65"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5" /></svg
+        ></span>
+        <p class="eyebrow" data-i18n="login.eyebrow">YOUR WORKSPACE. YOUR CONTROL.</p>
+        <h1 data-i18n-html="login.heading.html">Everything under<br />your control.</h1>
+        <p data-i18n="login.text">
+          Connect agents, projects and usage in one local dashboard. Start the panel with the
+          launcher to sign in automatically.
+        </p>
+        <form id="login-form">
+          <label for="login-token" data-i18n="login.label">Owner key</label>
+          <input
+            type="password"
+            id="login-token"
+            autocomplete="off"
+            required
+            placeholder="Paste the key from owner.token"
+            data-i18n-placeholder="login.placeholder"
+          />
+          <button type="submit" class="primary">
+            <span data-i18n="login.submit">Open workspace</span>
+            <svg
+              class="icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M5 12h14m-6-6 6 6-6 6" />
+            </svg>
+          </button>
+        </form>
+        <p id="login-error" class="note" role="alert"></p>
+        <div class="auth-private">
+          <svg
+            class="icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.65"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6Z" />
+            <path d="m8 12 3 3 5-6" />
+          </svg>
+          <p data-i18n-html="login.private.html">
+            The key stays in this browser tab. The <code>owner.token</code> file lives in the
+            <code>.opencode-mission-control</code> folder. Never send it in chat.
+          </p>
+        </div>
+      </section>
+      <p class="auth-brand" data-i18n-skip>
+        ugly.dashboard<span data-i18n="login.version">MISSION CONTROL / v6.0</span>
+      </p>
+    </div>
+  </body>
+</html>

@@ -1,53 +1,119 @@
 {
-  "version": "4.0.0",
-  "verified_date": "2026-09-16",
+  "version": "6.0.0",
+  "verified_date": "2026-09-17",
   "environment": {
-    "os": "Linux",
-    "python": "3.13.5",
-    "browser": "Chromium (headless; HTML/JS injection and local fixture HTTP adapter; browser navigation policy unchanged)"
+    "os": "Windows",
+    "python": "3.14.3",
+    "node": "24.14.0",
+    "note": "All checks run locally with synthetic fixtures only; no user source database, live session or credential is read by the suite. Linux coverage is owned by CI."
   },
   "regression_tests": {
-    "passed": 91,
-    "data": "Synthetic temporary databases, logs, HTTP endpoints and OAuth clients only."
+    "run": 190,
+    "passed": 188,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 2,
+    "skip_reasons": [
+      "test_scan_no_symlink_traversal: creating symlinks is unavailable in this environment.",
+      "test_restricted_secret_permissions: POSIX file-mode assertion; Windows uses account ACLs."
+    ],
+    "resource_warnings": 0,
+    "seconds": 55.0,
+    "data": "synthetic fixtures in temporary directories"
   },
   "built_in_self_tests": {
-    "passed": 10
+    "passed": 10,
+    "run": 10
+  },
+  "lint": {
+    "tool": "ruff 0.16.8 (repository pyproject configuration)",
+    "passed": true,
+    "errors": 0
+  },
+  "frontend_strict_check": {
+    "status": "passed",
+    "details": "eslint, strict typecheck (tsc), prettier format:check, i18n check (en 454 keys = pl 454 keys), reproducible esbuild bundle of index.html/app.js/style.css"
   },
   "browser_checks": {
-    "passed": 25,
-    "checks": [
-      "Owner-authenticated UI with local HTTP fixture transport",
-      "Untrusted source text cannot execute script",
-      "Rendered overview",
-      "Rendered projects",
-      "Rendered agents",
-      "Rendered graph",
-      "Rendered timeline",
-      "Rendered analytics",
-      "Rendered alerts",
-      "Rendered integrations",
-      "Rendered settings",
-      "Agent search filter",
-      "Inspector loads details safely",
-      "Owner assessment persisted",
-      "Graph nodes, zoom and fit",
-      "JSON export downloadable",
-      "Period analytics filtering",
-      "Bounded scanner returns selectable results",
-      "Copyable stdio configuration generated",
-      "Settings editor validates and saves",
-      "Light theme",
-      "Mobile page no horizontal overflow",
-      "Mobile graph, analytics and integration bounds",
-      "Unauthenticated browser shows no session data",
-      "No uncaught JavaScript errors"
-    ]
+    "status": "passed",
+    "passed": 38,
+    "run": 38,
+    "target": "production dist served by the real observer with manifest verification",
+    "coverage": "desktop and mobile; navigation, graph, inspector, timeline pagination, settings persistence, integrations, error states, structured completeness notices, usage report periods/toggles/consistency/exports, English and Polish (default English)"
+  },
+  "mcp_checks": {
+    "status": "passed",
+    "passed": 10,
+    "run": 10,
+    "coverage": "protocol negotiation, stable read tools with conditional report_event, strict validation, resources, limits, coverage consistency, token privilege boundaries, no secrets in responses or logs, stdio bridge clean from a foreign working directory with a spaced state path"
+  },
+  "migration_checks": {
+    "status": "passed",
+    "passed": 8,
+    "run": 8,
+    "coverage": "fresh install, v5 state migrated with backup and preserved rows/settings/assessments/secrets, current V6 untouched, repeated open idempotent, interrupted and write-error rollback with retry, newer schema refused, CLI migrate and running-observer refusal"
+  },
+  "synthetic_benchmark": {
+    "script": "scripts/benchmark_incremental.py",
+    "method": "docs/V6_BENCHMARKS.md",
+    "run_100k": {
+      "sessions": 1000,
+      "events": 100000,
+      "parts": 98000,
+      "expected_total_tokens": 12347213,
+      "received_total_tokens": 12347213,
+      "cycles_to_full_coverage": 1,
+      "full_coverage_seconds": 10.56,
+      "metadata_available_ms": 10510.2,
+      "first_overview_while_importing_ms": 20.4,
+      "analytics_cold_seconds": 0.033,
+      "analytics_warm_seconds": 0.001,
+      "tracemalloc_peak_bytes": 90318555,
+      "windows_working_set_bytes": null,
+      "aggregates_complete": "1000/1000",
+      "details_truncated": false
+    },
+    "run_1m": {
+      "sessions": 1000,
+      "events": 1002000,
+      "parts": 1000000,
+      "expected_total_tokens": 126001216,
+      "received_total_tokens": 126001216,
+      "cycles_to_full_coverage": 7,
+      "full_coverage_seconds": 126.946,
+      "metadata_available_ms": 18490.9,
+      "first_overview_while_importing_ms": 23.1,
+      "analytics_cold_seconds": 0.027,
+      "analytics_warm_seconds": 0.002,
+      "tracemalloc_peak_bytes": 242816596,
+      "windows_working_set_bytes": null,
+      "aggregates_complete": "1000/1000",
+      "loaded_sessions_detail_window": "148 of 1000; aggregates stay complete, limited details are reported explicitly"
+    },
+    "restart_mid_import": {
+      "first_cycle_complete": false,
+      "first_cycle_total": 87317016,
+      "resumed_cycles": 1,
+      "final_total": 126001216,
+      "expected_total_tokens": 126001216,
+      "sums_match": true,
+      "no_double_count": true
+    },
+    "restart_after_full_import": "identical totals for both sizes; 12,347,213 and 126,001,216 unchanged",
+    "memory_method": "tracemalloc peak = Python allocations in bytes; Windows working set via GetProcessMemoryInfo (null when unavailable). tracemalloc is not process RSS.",
+    "baseline_comparison": "Etap C reported 9.5 s / 1 cycle (100k) and 103.6 s / 6 cycles (1M). This run measured 10.56 s / 1 cycle and 126.95 s / 7 cycles with exact sums and lossless restarts; the difference is consistent with added coverage bookkeeping and machine load and is reported as this run's real measurement."
+  },
+  "ci": {
+    "workflow": ".github/workflows/ci.yml",
+    "status": "green for the final V6 commit (matrix windows-latest and ubuntu-latest with Python 3.10 and 3.14; browser job on Node 22 on both systems with mandatory browser tests on the production dist)",
+    "browser_evidence": "synthetic only (playwright-report and test-results; .fixture-info.json is never uploaded)"
   },
   "limitations": [
-    "No actual Windows execution of the CMD launchers.",
-    "No access to the user OpenCode database or live sessions in these tests.",
-    "No end-to-end login to the user ChatGPT or Codex account.",
-    "OAuth is a single-owner local implementation, not an independently audited identity product."
-  ],
-  "source_sha256": "d027cf0a7accd35a8c6646ddd8c2d75a655fac52f46242ffc327d115fcad1b91"
+    "The test suite never reads the user's OpenCode database, Codex logs or live sessions; only synthetic fixtures are used.",
+    "No real ChatGPT or Codex client login was performed; connecting a real client is an external acceptance step (checklist in the Integrations screen and docs/V6_HANDOFF.md).",
+    "Linux behaviour is covered by CI, not by the local Windows run.",
+    "The single-owner OAuth server is a local implementation and has not been independently audited.",
+    "Synthetic benchmark numbers vary with machine load; expected sums come from the generator, never from a recorded result.",
+    "At 1M events only 148 of 1000 sessions have full details inside the bounded window while the usage aggregates remain complete; this is reported explicitly in coverage, not hidden."
+  ]
 }

@@ -4,3 +4,16 @@ __pycache__/
 .venv/
 venv/
 .env
+artifacts/
+.opencode/
+mission_control/.opencode/
+node_modules/
+*.log
+
+# Local development and observer artifacts
+playwright-report/
+test-results/
+# Browser-fixture runtime secret (owner token for synthetic local fixture).
+# It lives under artifacts/ (ignored above); listed explicitly so it can
+# never be committed if the fixture root ever moves.
+**/.fixture-info.json

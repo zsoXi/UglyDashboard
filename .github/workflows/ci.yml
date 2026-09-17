@@ -1,0 +1,121 @@
+# MUSE-2 owned CI: verify Python + frontend on Windows and Linux.
+# No pull_request_target, no secrets, no publish/deploy. Least privilege
+# (contents:read). Every step runs a real check; nothing reports success
+# without executing the underlying tool.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ["3.10", "3.14"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pinned lint tool
+        run: python -m pip install "ruff==0.16.8"
+
+      - name: Python syntax check (compileall)
+        run: python -X utf8 -m compileall -q mission_control opencode_dashboard.py test_mission_control.py scripts
+
+      - name: Python lint (ruff, repo pyproject config)
+        run: python -X utf8 -m ruff check .
+
+      - name: Built-in self test (synthetic fixtures only)
+        run: python -X utf8 opencode_dashboard.py --self-test
+
+      - name: Regression suite (fails on errors and ResourceWarnings)
+        run: python -X utf8 scripts/run_tests.py
+
+      - name: Secret leak guard (repo sources + local evidence dirs)
+        run: python -X utf8 scripts/check_secrets.py
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install frontend dependencies (clean, locked)
+        run: npm ci
+
+      - name: Frontend check (lint, typecheck, format check, build)
+        run: npm run check
+
+  browser:
+    name: browser tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # tests/browser/global-setup.mjs spawns `python -X utf8
+      # scripts/browser_fixture.py`, so a real Python must be on PATH
+      # on every runner (setup-python provides the `python` launcher
+      # on both Windows and Linux).
+      - name: Set up Python 3.14 (browser fixture runtime)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install frontend dependencies (clean, locked)
+        run: npm ci
+
+      - name: Build frontend bundle (required before browser tests)
+        run: npm run build
+
+      - name: Install Chromium for Playwright (Linux, with OS deps)
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Chromium for Playwright (Windows)
+        if: runner.os == 'Windows'
+        run: npx playwright install chromium
+
+      # Exact package.json entrypoint. The Playwright config's global
+      # setup starts the synthetic fixture (real Engine + Server,
+      # ephemeral data, OS-assigned port) and teardown stops it; no
+      # user data, no external service, no secrets involved.
+      - name: Run browser tests (required)
+        run: npm run test:browser
+
+      # Failure evidence only, synthetic fixture data only. Paths are
+      # scoped to the Playwright report/test-results directories, which
+      # never contain .fixture-info.json (owner token), pid files, or
+      # user logs — those live outside the uploaded directories.
+      - name: Upload browser failure evidence (synthetic only)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-evidence-${{ matrix.os }}
+          retention-days: 14
+          path: |
+            artifacts/team/muse1/playwright-report
+            artifacts/team/muse1/test-results

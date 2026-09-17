@@ -1,17 +1,14 @@
-# Stable launcher and explicitly exported compatibility API.
-import json
-import sys
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+"""OpenCode Mission Control backend package.
 
-from mission_control import (
+The public surface is re-exported flat so the thin launcher and the
+regression suite keep using the historical single-module API.
+"""
+
+from .cli import builtin_self_test, cli_report, main, stdio_bridge
+from .core import (
     ACTIVE,
     APP,
-    CSS,
     HOME,
-    INTEGRATION_NOTES,
-    JS,
-    LOCAL_HTTP,
     LOG,
     MAX_BODY,
     MAX_LINE,
@@ -21,84 +18,97 @@ from mission_control import (
     MAX_OC_PARTS_TOTAL,
     MAX_RESPONSE,
     MAX_SESSION_USAGE_EVENTS,
-    MCP,
-    OAUTH_PAGE,
+    OPENCODE_READ_SECONDS,
     PACKAGE_ROOT,
-    PAGE,
-    REVEALABLE_SECRETS,
     SECRET_RE,
     STATE_DEFAULT,
     STATES,
     TERMINAL,
     VERSION,
-    WEB_DIR,
     Diagnostics,
-    Engine,
-    Handler,
-    JsonlReader,
     LifecycleError,
-    NoRedirect,
-    OAuth,
-    RPCError,
-    SecretError,
-    Server,
-    Store,
     add_event,
     add_usage,
     bounded_append,
-    build_fact,
-    build_facts,
-    builtin_self_test,
-    cli_report,
-    codex_apply,
     codex_usage,
     columns,
-    compute_analytics,
     day,
     default_config,
-    derive_alerts,
     digest,
-    discover_codex_files,
-    enrich_oc_session,
     existing_unique,
     extract_files,
     fingerprint,
-    git_info,
     is_within,
     launcher_path,
-    local_json,
-    main,
     make_session,
-    normalize_report,
     now_ms,
     number,
     obj,
-    oc_headers,
     oc_usage,
     path_key,
     path_name,
-    probe_opencode,
     public_copy,
-    read_definitions,
-    read_oc_live,
-    read_opencode,
     readonly_db,
     record_usage,
     redact,
-    reject_json_constant,
     safe_repr,
-    scan_paths,
     stamp,
-    stdio_bridge,
     stdio_script_args,
     tool_detail,
     validate_config,
     zero_usage,
 )
+from .engine import (
+    Engine,
+    build_fact,
+    build_facts,
+    compute_analytics,
+    derive_alerts,
+    normalize_report,
+)
+from .mcp import MCP, RPCError
+from .migration import (
+    CONFIG_VERSION,
+    SCHEMA_VERSION,
+    MigrationError,
+    migrate_config,
+    migrate_store,
+)
+from .oauth import OAuth
+from .server import (
+    CSS,
+    INTEGRATION_NOTES,
+    JS,
+    OAUTH_PAGE,
+    PAGE,
+    REVEALABLE_SECRETS,
+    WEB_DIR,
+    Handler,
+    Server,
+)
+from .sources import (
+    LOCAL_HTTP,
+    JsonlReader,
+    NoRedirect,
+    codex_apply,
+    discover_codex_files,
+    enrich_oc_session,
+    git_info,
+    local_json,
+    oc_headers,
+    probe_opencode,
+    read_definitions,
+    read_oc_live,
+    read_opencode,
+    reject_json_constant,
+    scan_paths,
+)
+from .store import SecretError, Store
 
 __all__ = [
     "ACTIVE",
     "APP",
+    "CONFIG_VERSION",
     "CSS",
     "Diagnostics",
     "Engine",
@@ -119,14 +129,16 @@ __all__ = [
     "MAX_RESPONSE",
     "MAX_SESSION_USAGE_EVENTS",
     "MCP",
+    "MigrationError",
     "NoRedirect",
     "OAUTH_PAGE",
     "OAuth",
+    "OPENCODE_READ_SECONDS",
     "PACKAGE_ROOT",
     "PAGE",
-    "Path",
     "REVEALABLE_SECRETS",
     "RPCError",
+    "SCHEMA_VERSION",
     "SECRET_RE",
     "STATES",
     "STATE_DEFAULT",
@@ -147,7 +159,6 @@ __all__ = [
     "codex_usage",
     "columns",
     "compute_analytics",
-    "datetime",
     "day",
     "default_config",
     "derive_alerts",
@@ -159,11 +170,12 @@ __all__ = [
     "fingerprint",
     "git_info",
     "is_within",
-    "json",
     "launcher_path",
     "local_json",
     "main",
     "make_session",
+    "migrate_config",
+    "migrate_store",
     "normalize_report",
     "now_ms",
     "number",
@@ -186,28 +198,7 @@ __all__ = [
     "stamp",
     "stdio_bridge",
     "stdio_script_args",
-    "sys",
-    "timedelta",
-    "timezone",
     "tool_detail",
     "validate_config",
     "zero_usage",
 ]
-
-if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except SystemExit:
-        raise
-    except Exception as exc:
-        LOG.exception("Startup failed")
-        if sys.stderr:
-            print(f"{APP}: {exc}", file=sys.stderr)
-        else:
-            try:
-                import tkinter.messagebox
-
-                tkinter.messagebox.showerror(APP, str(exc))
-            except Exception:
-                pass
-        raise SystemExit(1)
