@@ -130,6 +130,27 @@ zimna 0,02–0,06 s. Pamięć: tracemalloc szczyt 90 MB (100 tys.) i 270 MB
 (1 mln); pomiar RSS niedostępny na tym hoście (metoda raportowana jako
 null).
 
-Co pozostaje: przyrostowe discovery/dedup Codexa do pełnego pokrycia
-(oraz pola kompletności w API/UI/MCP), następnie Etap D (pełne EN/PL) i
-Etap E (MCP, build produkcyjny, migracja, odbiór).
+## Etap C (Codex) — przyrostowe discovery i pełne pokrycie — IMPLEMENTED AND VERIFIED
+
+Zaimplementowane: discovery zwraca teraz WSZYSTKIE odkryte pliki
+(`discover_all_codex_files`), a nie tylko okno najnowszych; każdy cykl
+przetwarza ograniczoną partię (limit plików), z trwałym kursorem rotacji
+(`codex_cursor` w observer.sqlite) oraz checkpointem na plik (rozmiar +
+licznik odczytu) w tabeli `usage_checkpoint` pod źródłem `codex`; pliki
+już przetworzone i niezmienione są publikowane z pamięci podręcznej
+(nigdy nie znikają ze snapshotu), a nie odczytywane ponownie; pokrycie
+raportowane jest rozdzielnie: `files_found`, `files_complete`,
+`pending_files`, `aggregates_complete`, `catching_up`.
+
+Dowody (lokalnie): `ruff` czysty; `scripts/run_tests.py` 157 testów,
+0 błędów, 2 pominięcia środowiskowe; `npm run check` zielony (odtwarzalny
+build); Playwright 27/27. `tests/test_v6_codex_incremental.py`: 12 plików
+z limitem partii 10 osiąga 12/12 plików i 1860 tokenów w kolejnych
+cyklach (pierwszy cykl niedokończony), a po zakończeniu suma nie rośnie;
+limit 1000 załatwia wszystko w jednym cyklu. Commity: `b4941dd`
+(OpenCode), `b105ecf` (Codex).
+
+Co pozostaje: pola kompletności w API/UI/MCP (metadata vs aggregates vs
+details, stale vs błąd odczytu), następnie Etap D (pełne EN/PL + raport
+zużycia) i Etap E (MCP, build produkcyjny serwowany z dist, migracja
+observer.sqlite, benchmarki końcowe, PR bez scalania).
