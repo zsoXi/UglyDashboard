@@ -248,6 +248,8 @@ export const EN = {
   'timeline.more': 'Load more',
 
   'analytics.period': 'Period',
+  'analytics.period.today': 'Today',
+  'analytics.period.all': 'All recorded history',
   'analytics.period.loaded': 'Loaded history',
   'analytics.period.7': 'Last 7 days',
   'analytics.period.30': 'Last 30 days',
@@ -260,6 +262,26 @@ export const EN = {
     'Real tokens are attributed to models. Test results, time and fixes are recorded in the inspector. A missing assessment stays missing.',
   'analytics.usage_time': 'Usage over time',
   'analytics.usage_window': '{tokens} tok · {sessions}',
+  'analytics.summary.tokens': 'Tokens',
+  'analytics.summary.sessions': 'Sessions',
+  'analytics.summary.recorded': 'Recorded cost',
+  'analytics.summary.estimated': 'Estimated cost',
+  'analytics.summary.unknown_cost': {
+    one: '{n} model without a known cost',
+    other: '{n} models without a known cost',
+  },
+  'analytics.currency_note':
+    'Amounts stay in the source currency; nothing is converted or invented.',
+  'analytics.scope_note':
+    'Period and source filters apply to the measured usage below. The router ledger is a separate global ledger and is never added to the totals.',
+  'analytics.methodology':
+    'Loaded native sessions only. Router excluded to avoid double counting. Files use equal allocation, not measured per-file cost. Outcomes/durations are owner-reported assessments, not independently verified. No model quality ranking is inferred from token volume.',
+  'analytics.cost_note':
+    'Missing rates/costs remain unknown. Configured USD-per-million rates are estimates, not invoices. Period costs are estimates only.',
+  'analytics.toggle.reasoning': 'Fold reasoning into output',
+  'analytics.toggle.absolute': 'Tokens',
+  'analytics.toggle.percent': 'Share (%)',
+  'analytics.chart.percent_aria': 'Token composition as percentages',
   'analytics.models': 'Model comparison',
   'analytics.owner_declarations': 'Test and review results: owner declarations',
   'analytics.table.model': 'Model / provider',
@@ -282,6 +304,14 @@ export const EN = {
   'analytics.files': 'Files · approximate split',
   'analytics.files.note':
     'Equal split of session tokens across recorded files. This is an attribution estimate, not a measured edit cost.',
+  'analytics.sessions.heading': 'Sessions in period',
+  'analytics.sessions.note': 'Loaded window only; the export covers the whole selected range.',
+  'analytics.projects.heading': 'Projects in period',
+  'analytics.files.unassigned': 'Unassigned',
+  'analytics.files.heuristic':
+    'Equal-allocation heuristic per session; not a measured per-file cost.',
+  'analytics.activity_global': 'Activity · 52 weeks · global',
+  'analytics.heat.nodata': 'no records for this day',
   'analytics.chart.none': 'No usage records in this period.',
   'analytics.chart.aria': 'Daily token usage',
   'analytics.chart.window':

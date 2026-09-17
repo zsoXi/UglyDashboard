@@ -190,6 +190,8 @@ let timelineQuery = '';
 let graphPose = { x: 20, y: 28, k: 1 };
 let graphDragged = false;
 let days = 0;
+let reasoningFolded = false;
+let percentMode = false;
 let taskGroup = '';
 let cardsMode = localStorage.getItem('mc-cards') === '1';
 /** @type {Set<string> | null} */
@@ -363,11 +365,12 @@ function empty(title, text, button = '') {
  * availability, metadata, aggregates, breakdowns, details, freshness,
  * progress and errors. Complete aggregates with a limited detail window are
  * informative, not a warning.
+ * @param {CoverageBlock | null | undefined} cov
+ * @param {number | null | undefined} [windowLimit]
  * @returns {string}
  */
-function coverage() {
-  if (!SNAP) return '';
-  const c = SNAP.coverage;
+function coverageNotice(cov, windowLimit) {
+  const c = cov;
   if (!c || Array.isArray(c)) return '';
   const breakdowns = c.breakdowns || {};
   /** @type {Array<'daily' | 'model' | 'file'>} */
@@ -384,7 +387,9 @@ function coverage() {
     lines.push(t('coverage.complete_limited'));
   }
   if (c.metadata_complete === false) {
-    const limit = c.scope && typeof c.scope.window_limit === 'number' ? c.scope.window_limit : null;
+    const fromScope =
+      c.scope && typeof c.scope.window_limit === 'number' ? c.scope.window_limit : null;
+    const limit = fromScope ?? (typeof windowLimit === 'number' ? windowLimit : null);
     lines.push(t('coverage.history_limited', { limit: limit === null ? '—' : fmt(limit) }));
   }
   if (names.length) lines.push(t('coverage.breakdowns_partial', { names: names.join(', ') }));
@@ -406,6 +411,11 @@ function coverage() {
     esc(lines.join(' ')) +
     '</div>'
   );
+}
+/** Snapshot completeness for the shell views. @returns {string} */
+function coverage() {
+  if (!SNAP) return '';
+  return coverageNotice(SNAP.coverage, SNAP.coverage?.scope?.window_limit);
 }
 /** @param {SessionSummary[]} sessions @returns {string} */
 function statsCards(sessions) {
@@ -828,8 +838,8 @@ async function render(force = false) {
       box.innerHTML =
         '<div class="panel"><div class="formrow"><label>' +
         esc(t('analytics.period')) +
-        '<select id="days"><option value="0">' +
-        esc(t('analytics.period.loaded')) +
+        '<select id="days"><option value="1">' +
+        esc(t('analytics.period.today')) +
         '</option><option value="7">' +
         esc(t('analytics.period.7')) +
         '</option><option value="30">' +
@@ -838,6 +848,8 @@ async function render(force = false) {
         esc(t('analytics.period.90')) +
         '</option><option value="365">' +
         esc(t('analytics.period.365')) +
+        '</option><option value="0">' +
+        esc(t('analytics.period.all')) +
         '</option></select></label><label>' +
         esc(t('analytics.group.label')) +
         '<input id="task-group" placeholder="' +
@@ -848,6 +860,8 @@ async function render(force = false) {
         esc(t('analytics.apply')) +
         '</button><button data-export="json">JSON</button><button data-export="csv">CSV</button></div><p class="note" style="margin-top:12px">' +
         esc(t('analytics.note')) +
+        '</p><p class="note">' +
+        esc(t('analytics.scope_note')) +
         '</p></div><div id="analytics-results"><div class="loading">' +
         esc(t('loading.analytics')) +
         '</div></div>';
@@ -906,8 +920,8 @@ async function render(force = false) {
     if (force) await settings(seq);
   }
 }
-/** @param {UsageDay[]} data @returns {string} */
-function chart(data) {
+/** @param {UsageDay[]} data @param {boolean} [fold] @returns {string} */
+function chart(data, fold = false) {
   if (!data.length) return '<p class="note">' + esc(t('analytics.chart.none')) + '</p>';
   const rows = data.slice(-120),
     w = 960,
@@ -931,7 +945,9 @@ function chart(data) {
   rows.forEach((d, i) => {
     let acc = 0;
     keys.forEach((k) => {
+      if (fold && k === 'reasoning') return;
       let v = d[k] || 0;
+      if (fold && k === 'output') v += d.reasoning || 0;
       if (v <= 0) return;
       let barh = (v / m) * (h - 2 * p);
       out +=
@@ -968,6 +984,96 @@ function chart(data) {
     (data.length > 120 ? '<p class="note">' + esc(t('analytics.chart.window')) + '</p>' : '')
   );
 }
+/** Inclusive local-calendar cutoff matching the backend period filter.
+ * @returns {number}
+ */
+function periodCutoff() {
+  if (!days) return 0;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+  return start.getTime();
+}
+/** Sessions of the loaded window matching the current source/project/period
+ * filters. Reported-only sessions never carry native tokens here.
+ * @returns {SessionSummary[]}
+ */
+function filteredPeriodSessions() {
+  if (!SNAP) return [];
+  const cutoff = periodCutoff();
+  const project = $select('project-filter').value;
+  const src = $select('source-filter').value;
+  return SNAP.sessions.filter(
+    (s) =>
+      s.source !== 'reported' &&
+      (!project || s.directory === project) &&
+      (!src || s.source === src) &&
+      (!cutoff || s.updated >= cutoff),
+  );
+}
+/** Presentation-only composition of the period tokens as percentages. The
+ * totals are untouched; components stay disjoint (reasoning folded into
+ * output only when the user asks for it).
+ * @param {UsageDay[]} data @returns {string}
+ */
+function percentChart(data) {
+  /** @type {Record<string, number>} */
+  const sums = {};
+  keys.forEach((k) => (sums[k] = 0));
+  data.forEach((d) => keys.forEach((k) => (sums[k] += d[k] || 0)));
+  if (reasoningFolded) {
+    sums.output += sums.reasoning;
+    sums.reasoning = 0;
+  }
+  const total = keys.reduce((n, k) => n + sums[k], 0);
+  if (!total) return '<p class="note">' + esc(t('analytics.chart.none')) + '</p>';
+  /** @param {string} k @returns {number} */
+  const pct = (k) => Math.round((sums[k] / total) * 1000) / 10;
+  return (
+    '<div class="chart-percent" role="img" aria-label="' +
+    esc(t('analytics.chart.percent_aria')) +
+    '"><div class="meter">' +
+    keys.map((k) => '<span class="' + k + '" style="width:' + pct(k) + '%"></span>').join('') +
+    '</div>' +
+    keys
+      .map(
+        (k) =>
+          '<div class="statusline"><span class="label">' +
+          esc(t('legend.' + (k === 'cache_read' || k === 'cache_write' ? 'cache' : k))) +
+          '</span><span class="num">' +
+          pct(k) +
+          '%</span></div>',
+      )
+      .join('') +
+    '</div>'
+  );
+}
+/** @param {SessionSummary[]} sessions @returns {string} */
+function projectRows(sessions) {
+  /** @type {Map<string, {name: string, sessions: number, tokens: number}>} */
+  const groups = new Map();
+  sessions.forEach((s) => {
+    const key = s.directory || '';
+    const row = groups.get(key) || { name: s.project || key || '—', sessions: 0, tokens: 0 };
+    row.sessions += 1;
+    row.tokens += s.usage?.total || 0;
+    groups.set(key, row);
+  });
+  return [...groups.values()]
+    .sort((a, b) => b.tokens - a.tokens)
+    .slice(0, 20)
+    .map(
+      (g) =>
+        '<div class="statusline"><span class="label">' +
+        esc(g.name) +
+        '</span><span class="num">' +
+        compact(g.tokens) +
+        ' · ' +
+        esc(t('sessions_short', { n: g.sessions })) +
+        '</span></div>',
+    )
+    .join('');
+}
 /** @returns {URLSearchParams} */
 function analyticsQuery() {
   return new URLSearchParams({
@@ -983,11 +1089,49 @@ async function loadAnalytics(seq = renderSeq) {
     const a = /** @type {Analytics} */ (await api('/api/analytics?' + analyticsQuery()));
     if (seq !== renderSeq || !$('analytics-results')) return;
     const max = Math.max(...a.activity.map((d) => d.total), 1);
+    const recorded = a.models
+      .filter((m) => m.recorded_cost != null)
+      .reduce((n, m) => n + (m.recorded_cost || 0), 0);
+    const estimated = a.models
+      .filter((m) => m.estimated_cost != null)
+      .reduce((n, m) => n + (m.estimated_cost || 0), 0);
+    const unknown = a.models.filter(
+      (m) => (m.usage?.total || 0) > 0 && m.recorded_cost == null && m.estimated_cost == null,
+    ).length;
+    const periodSessions = filteredPeriodSessions();
+    const seenDates = new Set(a.days.map((d) => d.date));
+    const unassigned = periodSessions
+      .filter((s) => !(s.files && s.files.length))
+      .reduce((n, s) => n + (s.usage?.total || 0), 0);
     $('analytics-results').innerHTML =
-      coverage() +
+      coverageNotice(a.coverage, SNAP?.coverage?.scope?.window_limit) +
       '<div class="notice info">' +
-      esc(a.methodology) +
-      '</div><div class="sectionhead"><h2>' +
+      esc(t('analytics.methodology')) +
+      '</div><div class="kpis analytics-kpis"><div class="kpi"><div class="kpi-top"><span class="label">' +
+      esc(t('analytics.summary.tokens')) +
+      '</span></div><div class="value" data-total="' +
+      a.tokens +
+      '">' +
+      compact(a.tokens) +
+      '</div></div><div class="kpi"><div class="kpi-top"><span class="label">' +
+      esc(t('analytics.summary.sessions')) +
+      '</span></div><div class="value">' +
+      fmt(a.sessions) +
+      '</div></div><div class="kpi"><div class="kpi-top"><span class="label">' +
+      esc(t('analytics.summary.recorded')) +
+      '</span></div><div class="value">' +
+      money(recorded) +
+      '</div></div><div class="kpi"><div class="kpi-top"><span class="label">' +
+      esc(t('analytics.summary.estimated')) +
+      '</span></div><div class="value">' +
+      money(estimated) +
+      '</div></div></div>' +
+      (unknown
+        ? '<p class="note">' + esc(t('analytics.summary.unknown_cost', { n: unknown })) + '</p>'
+        : '') +
+      '<p class="note">' +
+      esc(t('analytics.currency_note')) +
+      '</p><div class="sectionhead"><h2>' +
       esc(t('analytics.usage_time')) +
       ' <span>' +
       esc(
@@ -996,8 +1140,20 @@ async function loadAnalytics(seq = renderSeq) {
           sessions: t('sessions_short', { n: a.sessions }),
         }),
       ) +
-      '</span></h2></div><div class="panel">' +
-      chart(a.days) +
+      '</span></h2><div class="view-controls"><button id="fold-reasoning" class="smallbtn' +
+      (reasoningFolded ? ' active' : '') +
+      '">' +
+      esc(t('analytics.toggle.reasoning')) +
+      '</button><button id="chart-absolute" class="smallbtn' +
+      (!percentMode ? ' active' : '') +
+      '">' +
+      esc(t('analytics.toggle.absolute')) +
+      '</button><button id="chart-percent" class="smallbtn' +
+      (percentMode ? ' active' : '') +
+      '">' +
+      esc(t('analytics.toggle.percent')) +
+      '</button></div></div><div class="panel">' +
+      (percentMode ? percentChart(a.days) : chart(a.days, reasoningFolded)) +
       '</div><div class="sectionhead"><h2>' +
       esc(t('analytics.models')) +
       '</h2><span class="micro">' +
@@ -1054,21 +1210,28 @@ async function loadAnalytics(seq = renderSeq) {
       '</tbody></table>' +
       (a.models.length ? '' : empty(t('analytics.empty.title'), t('analytics.empty.text'))) +
       '<p class="note" style="margin-top:15px">' +
-      esc(a.cost_note) +
+      esc(t('analytics.cost_note')) +
       ' ' +
       esc(t('analytics.cost_suffix')) +
       '</p></div><div class="grid2" style="margin-top:18px"><div class="panel"><h2>' +
-      esc(t('analytics.activity')) +
+      esc(t('analytics.activity_global')) +
       '</h2><div class="heatmap">' +
       a.activity
-        .map(
-          (d) =>
+        .map((d) => {
+          const confirm = seenDates.has(d.date);
+          return (
             '<div class="heatcell l' +
             (d.total ? Math.max(1, Math.ceil((d.total / max) * 4)) : 0) +
+            (confirm ? '' : ' nodata') +
             '" title="' +
-            esc(t('analytics.heat.tooltip', { date: d.date, n: fmt(d.total) })) +
-            '"></div>',
-        )
+            esc(
+              confirm
+                ? t('analytics.heat.tooltip', { date: d.date, n: fmt(d.total) })
+                : t('analytics.heat.nodata'),
+            ) +
+            '"></div>'
+          );
+        })
         .join('') +
       '</div><p class="note">' +
       esc(t('analytics.heat.note')) +
@@ -1086,9 +1249,55 @@ async function loadAnalytics(seq = renderSeq) {
             '</span></div>',
         )
         .join('') +
-      '<p class="note" style="margin-top:12px">' +
+      '<div class="statusline"><span class="label">' +
+      esc(t('analytics.files.unassigned')) +
+      '</span><span class="num">' +
+      compact(unassigned) +
+      '</span></div><p class="note" style="margin-top:12px">' +
       esc(t('analytics.files.note')) +
-      '</p></div></div>' +
+      '</p><p class="note">' +
+      esc(t('analytics.files.heuristic')) +
+      '</p></div></div><div class="sectionhead"><h2>' +
+      esc(t('analytics.sessions.heading')) +
+      '</h2><span class="micro">' +
+      esc(t('analytics.sessions.note')) +
+      '</span></div><div class="panel tablewrap"><table class="table"><thead><tr><th>' +
+      esc(t('table.agent')) +
+      '</th><th>' +
+      esc(t('table.model')) +
+      '</th><th>' +
+      esc(t('table.project')) +
+      '</th><th class="right">' +
+      esc(t('table.tokens')) +
+      '</th><th>' +
+      esc(t('table.activity')) +
+      '</th></tr></thead><tbody>' +
+      periodSessions
+        .slice(0, 25)
+        .map(
+          (s) =>
+            '<tr data-inspect="' +
+            esc(s.id) +
+            '" tabindex="0" role="button" data-tokens="' +
+            (s.usage?.total || 0) +
+            '"><td>' +
+            esc(s.agent) +
+            '</td><td>' +
+            esc(s.model) +
+            '</td><td>' +
+            esc(s.project) +
+            '</td><td class="right num">' +
+            compact(s.usage?.total || 0) +
+            '</td><td class="num">' +
+            esc(ago(s.updated)) +
+            '</td></tr>',
+        )
+        .join('') +
+      '</tbody></table></div><div class="sectionhead"><h2>' +
+      esc(t('analytics.projects.heading')) +
+      '</h2></div><div class="panel">' +
+      projectRows(periodSessions) +
+      '</div>' +
       routerPanel();
   } catch (e) {
     if ($('analytics-results'))
@@ -2059,6 +2268,18 @@ document.addEventListener('click', async (e) => {
       case 'analytics-apply':
         days = Number($select('days').value);
         taskGroup = $input('task-group').value.trim();
+        await loadAnalytics();
+        break;
+      case 'fold-reasoning':
+        reasoningFolded = !reasoningFolded;
+        await loadAnalytics();
+        break;
+      case 'chart-absolute':
+        percentMode = false;
+        await loadAnalytics();
+        break;
+      case 'chart-percent':
+        percentMode = true;
         await loadAnalytics();
         break;
       case 'copy-session':

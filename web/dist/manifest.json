@@ -1,11 +1,11 @@
 {
   "inputs": {
     "index.html": "b66877e94724ba64921137e61a27161d586684c65c74b3af7cf68c652289bc86",
-    "app.js": "013de94dc9b3e2c6ff4626b1355c4e30b5391ac4e8bbeb30310c01473dcda27a",
+    "app.js": "21572ad8dfcc453e656d012e4a33711b8fccfc7368f7c71d0967bc30453e51c3",
     "style.css": "74eb7ba4bca924c5033932d08d25215805ce086773c74f60d1fc9f3bae190a9e"
   },
   "outputs": {
-    "app.js": "7452dff989817ae5e02b55dfd80f44353bc755dfef7647f7726553039b641e39",
+    "app.js": "e47c00f9c237d62ef14a865beafb3ad57af7b477396d19ecba9f1014de10a8a8",
     "style.css": "4bbda4fdc990a135334c3dbd272b7df2ffee65aa48fb8ac753bcfb904a80a163"
   }
 }

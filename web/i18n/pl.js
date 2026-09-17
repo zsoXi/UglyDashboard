@@ -256,6 +256,8 @@ export const PL = {
   'timeline.more': 'Wczytaj więcej',
 
   'analytics.period': 'Okres',
+  'analytics.period.today': 'Dzisiaj',
+  'analytics.period.all': 'Cała zarejestrowana historia',
   'analytics.period.loaded': 'Załadowana historia',
   'analytics.period.7': 'Ostatnie 7 dni',
   'analytics.period.30': 'Ostatnie 30 dni',
@@ -268,6 +270,28 @@ export const PL = {
     'Modelom przypisujemy rzeczywiste tokeny. Wyniki testów, czas i poprawki zapisujesz w inspektorze. Brak oceny pozostaje brakiem oceny.',
   'analytics.usage_time': 'Zużycie w czasie',
   'analytics.usage_window': '{tokens} tok · {sessions}',
+  'analytics.summary.tokens': 'Tokeny',
+  'analytics.summary.sessions': 'Sesje',
+  'analytics.summary.recorded': 'Koszt zapisany',
+  'analytics.summary.estimated': 'Koszt szacowany',
+  'analytics.summary.unknown_cost': {
+    one: '{n} model bez znanego kosztu',
+    few: '{n} modele bez znanego kosztu',
+    many: '{n} modeli bez znanego kosztu',
+    other: '{n} modeli bez znanego kosztu',
+  },
+  'analytics.currency_note':
+    'Kwoty pozostają w walucie źródła; nic nie jest przeliczane ani wymyślane.',
+  'analytics.scope_note':
+    'Filtry okresu i źródła dotyczą poniższych zmierzonych danych. Rejestr routera jest osobnym, globalnym rejestrem i nigdy nie jest dodawany do sum.',
+  'analytics.methodology':
+    'Tylko załadowane sesje natywne. Router wyłączony, aby uniknąć podwójnego liczenia. Pliki dzielone równo, nie według zmierzonego kosztu. Wyniki i czasy pochodzą z deklaracji właściciela, nie z niezależnej weryfikacji. Z wolumenu tokenów nie wnioskujemy o jakości modeli.',
+  'analytics.cost_note':
+    'Brakujące stawki i koszty pozostają nieznane. Skonfigurowane stawki USD za milion tokenów to estymaty, nie faktury. Koszty okresu są wyłącznie szacunkowe.',
+  'analytics.toggle.reasoning': 'Zwiń reasoning do outputu',
+  'analytics.toggle.absolute': 'Tokeny',
+  'analytics.toggle.percent': 'Udział (%)',
+  'analytics.chart.percent_aria': 'Skład tokenów w procentach',
   'analytics.models': 'Porównanie modeli',
   'analytics.owner_declarations': 'Wyniki testów i review: deklaracje właściciela',
   'analytics.table.model': 'Model / provider',
@@ -295,6 +319,14 @@ export const PL = {
   'analytics.files': 'Pliki · przybliżony podział',
   'analytics.files.note':
     'Równy podział tokenów sesji między odnotowane pliki. To estymata przypisania, nie zmierzony koszt konkretnej edycji.',
+  'analytics.sessions.heading': 'Sesje w okresie',
+  'analytics.sessions.note': 'Tylko załadowane okno; eksport obejmuje cały wybrany zakres.',
+  'analytics.projects.heading': 'Projekty w okresie',
+  'analytics.files.unassigned': 'Nieprzypisane',
+  'analytics.files.heuristic':
+    'Heurystyka równego podziału na sesję; to nie zmierzony koszt pliku.',
+  'analytics.activity_global': 'Aktywność · 52 tygodnie · globalnie',
+  'analytics.heat.nodata': 'brak rekordów tego dnia',
   'analytics.chart.none': 'Brak rekordów zużycia w tym okresie.',
   'analytics.chart.aria': 'Dzienne zużycie tokenów',
   'analytics.chart.window':

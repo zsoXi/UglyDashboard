@@ -87,6 +87,7 @@ interface SessionSummary {
   messages: number;
   context_tokens: number | null;
   context_limit: number | null;
+  files: string[];
   errors: number;
   retry_count: number;
   warnings: string[];
