@@ -8,8 +8,8 @@
     "note": "All checks run locally with synthetic fixtures only; no user source database, live session or credential is read by the suite. Linux coverage is owned by CI."
   },
   "regression_tests": {
-    "run": 189,
-    "passed": 187,
+    "run": 190,
+    "passed": 188,
     "failures": 0,
     "errors": 0,
     "skipped": 2,
@@ -18,7 +18,7 @@
       "test_restricted_secret_permissions: POSIX file-mode assertion; Windows uses account ACLs."
     ],
     "resource_warnings": 0,
-    "seconds": 56.1,
+    "seconds": 55.0,
     "data": "synthetic fixtures in temporary directories"
   },
   "built_in_self_tests": {

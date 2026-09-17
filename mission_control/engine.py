@@ -276,6 +276,38 @@ def build_facts(rows):
     return [build_fact(s) for s in rows]
 
 
+def codex_session_payload(s):
+    """JSON-safe snapshot of a fully processed Codex session for a checkpoint.
+
+    Stored with the per-file read checkpoint so a restarted observer can
+    republish every accounted session from durable state instead of re-reading
+    unchanged logs. The activity timeline (``events``) is not part of any
+    snapshot surface and is skipped; usage events are kept so coverage flags and
+    analytics stay identical to the pre-restart state.
+    """
+    return {
+        k: copy.deepcopy(v) for k, v in s.items() if not k.startswith("_") and k != "events"
+    }
+
+
+def _restore_codex_item(path, payload):
+    """Rebuild a cached Codex item from a durable checkpoint payload.
+
+    Returns ``None`` when the checkpoint does not carry a usable payload (an
+    older state, or a file that never finished a read), in which case the file
+    is read again instead of publishing invented totals. A restored session has
+    never been read by this process, so the marker makes the read path rebuild
+    it from zero before applying any records.
+    """
+    if not isinstance(payload, dict) or not payload.get("usage"):
+        return None
+    s = make_session("codex", Path(path).stem)
+    for key, value in payload.items():
+        s[key] = copy.deepcopy(value)
+    s["usage_known"] = bool(s.get("usage_known") or s["usage"].get("total"))
+    return {"reader": JsonlReader(), "session": s, "restored": True}
+
+
 COVERAGE_COMPLETE = "complete"
 COVERAGE_PARTIAL = "partial"
 COVERAGE_UNKNOWN = "unknown"
@@ -964,10 +996,16 @@ class Engine:
                 next_index = (index + 1) % total_files
                 continue
             saved = done_checkpoints.get(path) or {}
-            if saved.get("complete") and int(saved.get("size") or -1) == size:
-                # Already aggregated and unchanged: publish the cached session
-                # below instead of re-reading the file, so the snapshot keeps
-                # every processed Codex session while the batch rotates.
+            restorable = isinstance(saved.get("session"), dict)
+            if (
+                saved.get("complete")
+                and int(saved.get("size") or -1) == size
+                and (path in self.codex_cache or restorable)
+            ):
+                # Already aggregated and unchanged: publish the session from the
+                # cache or from the durable checkpoint payload instead of
+                # re-reading the file, so the snapshot keeps every processed
+                # Codex session (also across restarts) while the batch rotates.
                 reuse.append(path)
                 next_index = (index + 1) % total_files
                 continue
@@ -1000,6 +1038,11 @@ class Engine:
                     path,
                     {"reader": JsonlReader(), "session": make_session("codex", Path(path).stem)},
                 )
+                if item.pop("restored", False):
+                    # A restored session was never read here and the fresh
+                    # reader starts at offset zero: rebuild it from zero so the
+                    # cumulative deltas are applied exactly once.
+                    item["session"] = make_session("codex", Path(path).stem)
                 reader = item["reader"]
                 records = reader.read(path)
                 if reader.reset:
@@ -1031,7 +1074,12 @@ class Engine:
         for path in reuse:
             item = self.codex_cache.get(path)
             if not item:
-                continue
+                item = _restore_codex_item(
+                    path, (done_checkpoints.get(path) or {}).get("session")
+                )
+                if item is None:
+                    continue
+                self.codex_cache[path] = item
             ss = copy.deepcopy(item["session"])
             old = all_sessions.get(ss["id"])
             if old is None or ss["updated"] > old["updated"]:
@@ -1047,7 +1095,14 @@ class Engine:
                 size = Path(path).stat().st_size
             except OSError:
                 continue
-            updates[path] = {"size": size, "complete": item["reader"].offset >= size}
+            complete = item["reader"].offset >= size
+            data = {"size": size, "complete": complete}
+            if complete:
+                # Keep the processed session itself in the durable checkpoint so
+                # a restart can publish every accounted Codex session without
+                # re-reading unchanged logs and without inventing totals.
+                data["session"] = codex_session_payload(item["session"])
+            updates[path] = data
         if updates:
             self.store.put_checkpoints("codex", list(updates.items()))
         done_checkpoints.update(updates)

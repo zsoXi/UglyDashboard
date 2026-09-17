@@ -283,7 +283,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         # No auth query strings, bearer tokens, authorization codes or form bodies.
-        LOG.info("%s %s", self.command, self.path.split("?")[0])
+        # ``command``/``path`` may be unset when the base server logs an error
+        # (for example a request timeout) before a request line was parsed.
+        LOG.info(
+            "%s %s",
+            getattr(self, "command", "-"),
+            str(getattr(self, "path", "")).split("?")[0],
+        )
 
     @property
     def engine(self):
@@ -608,8 +614,18 @@ class Handler(BaseHTTPRequestHandler):
                     writer.writerow(fields)
                     for row in analytics["days"]:
                         writer.writerow([row.get(k, "") for k in fields])
-                    # Row/column limits must never hide the completeness contract:
-                    # the same coverage block as the JSON export travels with CSV.
+                    coverage = analytics.get("coverage") or {}
+                    # Row/column limits must never hide the completeness contract,
+                    # and a downloaded file must stay self-describing: the same
+                    # coverage block as the JSON export travels with the CSV body
+                    # and in the X-Mission-Control-Coverage response header.
+                    writer.writerow([])
+                    writer.writerow(
+                        [
+                            "# coverage",
+                            json.dumps(coverage, ensure_ascii=True, separators=(",", ":")),
+                        ]
+                    )
                     self.send(
                         200,
                         out.getvalue(),
@@ -617,7 +633,7 @@ class Handler(BaseHTTPRequestHandler):
                         {
                             "Content-Disposition": 'attachment; filename="mission-control-days.csv"',
                             "X-Mission-Control-Coverage": json.dumps(
-                                analytics.get("coverage") or {},
+                                coverage,
                                 ensure_ascii=True,
                                 separators=(",", ":"),
                             ),

@@ -22,7 +22,7 @@ lokalnych danych użytkownika. Liczby pochodzą z `TEST_REPORT.json`
 | Etap | Status | Commit | Dowód / zakres |
 | --- | --- | --- | --- |
 | A–C — izolacja, sekrety, przyrostowe pokrycie | IMPLEMENTED AND VERIFIED | `ac4d70f`, `5fe314a`, `b4941dd`, `b105ecf` | 144 testy baseline; `npm ci` 87 pakietów / 0 podatności; `Store.rotate_secret`, CLI `--rotate-owner-token`, `scripts/check_secrets.py`; `docs/V6_RECONCILIATION.md` |
-| C.1 — precyzyjny kontrakt kompletności | IMPLEMENTED AND VERIFIED | `c7e8bca` | `tests/test_v6_coverage.py` (8); wspólny blok kompletności w UI, eksporcie CSV (`X-Mission-Control-Coverage`) i MCP |
+| C.1 — precyzyjny kontrakt kompletności | IMPLEMENTED AND VERIFIED | `c7e8bca` | `tests/test_v6_coverage.py` (8); wspólny blok kompletności w UI, eksporcie CSV (nagłówek `X-Mission-Control-Coverage` + sekcja `# coverage` w pobranym pliku) i MCP |
 | D.1 — pełne English / Polski | IMPLEMENTED AND VERIFIED | `8459551` | 454 klucze EN = 454 PL; `scripts/check_i18n.mjs` w `npm run check`; przełącznik języka bez resetu filtrów, widoku ani inspektora |
 | D.2 — raport zużycia | IMPLEMENTED AND VERIFIED | `fd0088a` | okresy Today/7/30/90/rok/całość; karty KPI; `tests/browser/usage.spec.mjs` (6) |
 | E.1 — produkcyjny frontend z `dist` | IMPLEMENTED AND VERIFIED | `fbdb4a9` | `web/dist` + manifest sha256; czytelna strona „wymagany build”; brak cichego fallbacku na źródła; `--dev-web`; `tests/test_v6_dist.py` (6) |
@@ -32,15 +32,18 @@ lokalnych danych użytkownika. Liczby pochodzą z `TEST_REPORT.json`
 
 ## Pomiary końcowe (skrót z `TEST_REPORT.json`)
 
-- Python: 189 testów, 0 błędów, 2 pominięcia środowiskowe (tworzenie
+- Python: 190 testów, 0 błędów, 2 pominięcia środowiskowe (tworzenie
   symlinków niedostępne; tryb POSIX plików sekretów na Windows),
-  0 `ResourceWarning`, 56,1 s.
+  0 `ResourceWarning`, 55,0 s.
 - Wbudowane self-testy: 10/10. `ruff`: czysto.
 - Frontend: `npm run check` zielony — eslint, ścisły typecheck, prettier,
   parytet i18n (454 = 454), odtwarzalny build (`index.html`, `app.js`,
   `style.css`).
 - Przeglądarka: 38/38 na produkcyjnym `dist` (desktop + mobile).
 - MCP: 10/10. Migracja: 8/8. `scripts/check_secrets.py`: czysto.
+- Restart (dane rzeczywiste): trwałe checkpointy sesji Codex odtwarzają sumy
+  i sesje bez ponownego odczytu niezmienionych logów; test regresyjny
+  `test_restart_republishes_durable_checkpoints_without_recounting`.
 
 ## Benchmarki (syntetyczne, `scripts/benchmark_incremental.py`)
 

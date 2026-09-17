@@ -13,8 +13,13 @@ isolated V6 worktree; the running v5 instance was not modified.
 - Completeness is scoped to the selected sources and time range;
   `history_limited` marks a bounded session window, unknown values stay
   `null` instead of a fake zero.
-- CSV export carries the same block in the `X-Mission-Control-Coverage` header;
+- CSV export carries the same block in the `X-Mission-Control-Coverage` header,
+  and a downloaded CSV repeats it in the file body as a trailing `# coverage`
+  metadata row, so the artifact stays self-describing;
   "totals complete, detailed history limited" is informational, not a warning.
+- Codex usage aggregates are durable: every read checkpoint stores the
+  processed session snapshot, so a restart republishes every accounted session
+  (sums, models, days) instead of losing history or re-reading unchanged logs.
 
 ### English / Polish (D.1)
 

@@ -16,6 +16,7 @@ snapshot (UI/overview), analytics, exports and MCP:
   and stays consistent between HTTP surfaces and MCP.
 """
 
+import csv
 import json
 import os
 import sqlite3
@@ -330,7 +331,7 @@ class CoverageSurfaceConsistencyTests(tmc.Base):
         )
         for key in shared:
             self.assertEqual(analytics_cov[key], overview["coverage"][key], key)
-        status, _, headers = self.raw("/api/export?format=csv&days=30")
+        status, csv_text, headers = self.raw("/api/export?format=csv&days=30")
         self.assertEqual(status, 200)
         lowered = {k.lower(): v for k, v in headers.items()}
         header_cov = json.loads(lowered["x-mission-control-coverage"])
@@ -345,6 +346,14 @@ class CoverageSurfaceConsistencyTests(tmc.Base):
             "breakdowns",
         ):
             self.assertEqual(header_cov[key], analytics_cov[key], key)
+        # A downloaded file must explain its own completeness, not rely on the
+        # response header: a trailing "# coverage" metadata row carries it.
+        body_cov = next(
+            json.loads(row[1])
+            for row in csv.reader(csv_text.splitlines())
+            if row and row[0] == "# coverage"
+        )
+        self.assertEqual(body_cov, header_cov)
         auth = {
             "role": "owner",
             "scopes": ["mission:read", "mission:report"],

@@ -38,7 +38,9 @@ Usage is normalized into one record shape:
 
 * Session totals are accumulated into a durable per-source
   `usage_checkpoint`, so aggregates survive restarts and progress
-  independently of how much detail is kept.
+  independently of how much detail is kept. For Codex, every file's read
+  checkpoint stores the processed session snapshot as well, so a restart
+  republishes all accounted sessions instead of re-reading unchanged logs.
 * Detailed usage events are kept in a bounded window per session. When the
   window drops events, the dropped count is reported
   (`detail_events_evicted`) and the session is flagged, so the affected
@@ -115,7 +117,8 @@ estimate, not measured per-file usage.
   `catching_up` is range-precise - a global catch-up that cannot affect the
   selection does not flag it.
 * Exports: JSON carries the block; CSV responses carry it in the
-  `X-Mission-Control-Coverage` header.
+  `X-Mission-Control-Coverage` header and a downloaded CSV repeats it in the
+  file body as a trailing `# coverage` metadata row.
 * MCP: coverage-reading tools return the same block, and the MCP suite checks
   its consistency with the HTTP snapshot.
 

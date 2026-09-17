@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import { expectQuiet, goView, login, startWatch } from './fixture.mjs';
 
@@ -125,4 +126,7 @@ test('exports still deliver the selected range', async ({ page }) => {
     page.locator('[data-export="csv"]').click(),
   ]);
   expect(csv.suggestedFilename()).toBe('mission-control.csv');
+  const csvBody = await readFile(await csv.path(), 'utf8');
+  expect(csvBody).toContain('# coverage');
+  expect(csvBody).toContain('aggregates_complete');
 });

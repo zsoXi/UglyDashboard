@@ -3,7 +3,9 @@
 The per-cycle file limit bounds ONE cycle; it must never mean that other
 discovered logs are skipped forever. Each batch must publish the sessions it
 processed (including files skipped as already complete) so the snapshot can
-never lose a session that was already accounted for.
+never lose a session that was already accounted for - including after a
+restart, which must republish the durable checkpoints instead of re-reading
+unchanged logs.
 """
 
 import json
@@ -65,6 +67,18 @@ class CodexIncrementalTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
 
+    def _config(self, limit):
+        return {
+            "db_paths": [],
+            "codex_homes": [str(self.root / "codex-home")],
+            "router_events": [],
+            "opencode_urls": [],
+            "projects": [],
+            "git_enabled": False,
+            "codex_file_limit": limit,
+            "poll_seconds": 3,
+        }
+
     def _engine(self, limit):
         home = self.root / "codex-home"
         for index in range(FILE_COUNT):
@@ -75,19 +89,7 @@ class CodexIncrementalTests(unittest.TestCase):
                 1_700_000_000 + index * 100,
                 "%02d" % index,
             )
-        engine = mc.Engine(
-            self.root / "state",
-            {
-                "db_paths": [],
-                "codex_homes": [str(home)],
-                "router_events": [],
-                "opencode_urls": [],
-                "projects": [],
-                "git_enabled": False,
-                "codex_file_limit": limit,
-                "poll_seconds": 3,
-            },
-        )
+        engine = mc.Engine(self.root / "state", self._config(limit))
         self.addCleanup(engine.close)
         return engine
 
@@ -136,6 +138,34 @@ class CodexIncrementalTests(unittest.TestCase):
         self.assertEqual(source["pending_files"], 0)
         self.assertTrue(source["aggregates_complete"])
         self.assertEqual(self._tokens(engine), _expected_tokens())
+
+    def test_restart_republishes_durable_checkpoints_without_recounting(self):
+        engine = self._engine(limit=1000)
+        engine.poll()
+        expected = _expected_tokens()
+        self.assertEqual(len(engine.view()["sessions"]), FILE_COUNT)
+        self.assertEqual(self._tokens(engine), expected)
+        engine.close()
+        # A fresh process on the same state directory must republish every
+        # accounted session from the durable checkpoint payloads: no lost
+        # history after a restart and no cumulative deltas applied twice.
+        restarted = mc.Engine(self.root / "state", self._config(limit=1000))
+        self.addCleanup(restarted.close)
+        restarted.poll()
+        source = self._codex_source(restarted)
+        self.assertTrue(source["aggregates_complete"])
+        self.assertEqual(source["pending_files"], 0)
+        self.assertEqual(len(restarted.view()["sessions"]), FILE_COUNT)
+        self.assertEqual(self._tokens(restarted), expected)
+        payloads = restarted.store.checkpoints("codex")
+        self.assertTrue(payloads)
+        self.assertTrue(
+            all(isinstance(entry.get("session"), dict) for entry in payloads.values())
+        )
+        # Idle polling after the restart must stay stable too.
+        restarted.poll()
+        self.assertEqual(len(restarted.view()["sessions"]), FILE_COUNT)
+        self.assertEqual(self._tokens(restarted), expected)
 
 
 if __name__ == "__main__":
