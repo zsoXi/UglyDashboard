@@ -17,6 +17,11 @@ test.afterEach(async () => {
 test('desktop dark: overview and agents', async ({ page }) => {
   await expect(page.locator('#view .kpi').first()).toBeVisible();
   await page.screenshot({ path: 'docs/screenshots/overview-dark.png' });
+  await page.locator('#lang').click();
+  await expect(page.locator('#lang-code')).toHaveText('PL');
+  await page.screenshot({ path: 'docs/screenshots/overview-pl-dark.png' });
+  await page.locator('#lang').click();
+  await expect(page.locator('#lang-code')).toHaveText('EN');
   await goView(page, 'agents');
   await expect(page.locator('#view table.table')).toBeVisible();
   await page.screenshot({
@@ -37,6 +42,11 @@ test('desktop light: overview', async ({ page }) => {
 test('@mobile: overview and open navigation', async ({ page }) => {
   await expect(page.locator('#view .kpi').first()).toBeVisible();
   await page.screenshot({ path: 'docs/screenshots/overview-mobile.png' });
+  await page.locator('#lang').click();
+  await expect(page.locator('#lang-code')).toHaveText('PL');
+  await page.screenshot({ path: 'docs/screenshots/overview-pl-mobile.png' });
+  await page.locator('#lang').click();
+  await expect(page.locator('#lang-code')).toHaveText('EN');
   await page.locator('#menu-toggle').click();
   await expect(page.locator('body')).toHaveClass(/nav-open/);
   await page.screenshot({ path: 'artifacts/team/muse1/nav-mobile.png' });

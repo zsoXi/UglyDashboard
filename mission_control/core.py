@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 from .migration import CONFIG_VERSION
 
-VERSION = "5.0.0"
+VERSION = "6.0.0"
 
 
 APP = "OpenCode Mission Control"

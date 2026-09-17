@@ -248,7 +248,7 @@ def migrate_state(directory):
     Never touches OpenCode or Codex source databases and never rotates a
     credential. A running observer is refused because it holds the state open.
     """
-    from .migration import MigrationError, SCHEMA_VERSION
+    from .migration import SCHEMA_VERSION, MigrationError
     from .store import Store
 
     state = Path(directory).expanduser().resolve()

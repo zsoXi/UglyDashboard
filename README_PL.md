@@ -1,4 +1,4 @@
-# OpenCode Mission Control v5
+# OpenCode Mission Control v6
 
 Lokalny panel obserwatora dla OpenCode, logów Codexa, projektów,
 agentów, modeli, historii i MCP. Jeden właściciel, jedna maszyna:
@@ -6,25 +6,28 @@ czyta lokalne źródła tylko do odczytu i pokazuje aktywność,
 analitykę, alerty oraz integracje w przeglądarce. Nie uruchamia
 agentów, nie wysyła do nich poleceń ani nie modyfikuje repozytoriów.
 
-> Stan: utwardzanie v5 w toku na gałęzi
-> `fix/mission-control-v5-hardening-ui` (hardening Pythona, ścisłe typy
-> frontendu/build, testy przeglądarkowe, narzędzia dostawcze). Wszystko
-> oznaczone jako *oczekujące* jeszcze nie wylądowało; nic tutaj nie
+> Stan: v6 (6.0.0) zaimplementowane i zweryfikowane w izolowanym
+> worktree na gałęzi `feat/mission-control-v6` (kontrakt kompletności
+> danych, lokalizacja EN/PL, raport użycia, serwowanie produkcyjnego
+> bundla, wersjonowana migracja stanu, kontrole MCP/bezpieczeństwa).
+> Działająca instancja v5 i jej dane nie są modyfikowane. Nic tutaj nie
 > twierdzi, że nieuruchomiona kontrola przeszła.
 
-## Struktura pakietu (v5, nie dawny pojedynczy plik)
+## Struktura pakietu
 
 ```text
 opencode_dashboard.py      Cienki launcher / API zgodności (importuje mission_control)
 mission_control/           Pakiet backendu: cli, core, engine, locking,
-                           mcp, oauth, server, sources, store
-web/                       Źródła frontendu (index.html, app.js, style.css)
+                           mcp, migration, oauth, server, sources, store
+web/                       Źródła frontendu (index.html, app.js, style.css, i18n/)
+web/dist/                  Zbudowany bundle produkcyjny (serwowany domyślnie, manifest sha256)
 scripts/build.mjs          Krok budowania frontendu (npm run build)
 test_mission_control.py    Regresja offline (katalog główny)
 tests/                     Dodatkowe suity hardeningowe
 scripts/run_tests.py       Runner unittestów offline (uczciwy kod wyjścia)
 scripts/smoke_startup.py   Test dymny prawdziwego panelu na porcie loopback
 scripts/benchmark.py       Syntetyczny benchmark dużych danych (tylko stdlib)
+scripts/benchmark_incremental.py  Benchmark importu przyrostowego (syntetyczne 100k / 1M)
 docs/benchmarks/           Oczyszczone wyniki benchmarków + opis metody
 .github/workflows/ci.yml   CI Windows + Linux (Python 3.10/3.14, Node 22)
 ```
@@ -37,10 +40,55 @@ linii poleceń (`--db`, `--port`, `--self-test`, …).
 Źródła frontendu mieszkają w `web/` i są bundlowane przez
 `npm run build` (esbuild → `web/dist/app.js` + `style.css` +
 `manifest.json` z hashami wejść/wyjść). Wymagania: Node **≥ 22.13**
-i czyste `npm ci` z zacommitowanego lockfile. Serwer Pythona serwuje
-źródła z `web/` bezpośrednio; krok bundla jest mimo to wymagany
-(i puszcza go CI), żeby dowieść odtwarzalnego budowania zasobów
-wysyłkowych.
+i czyste `npm ci` z zacommitowanego lockfile. Domyślnie serwer serwuje
+zbudowany bundle `web/dist` i weryfikuje go hashami sha256 z manifestu;
+gdy bundla brakuje, pokazuje czytelną stronę „wymagany build” zamiast
+cichego fallbacku do źródeł. `--dev-web` serwuje źródła z `web/`
+bezpośrednio (tryb developerski); `npm run check` (lint, ścisłe typy,
+prettier, kontrola kluczy i18n, odtwarzalny build) to brama frontendu.
+
+## Co nowego w V6 (6.0.0)
+
+- Kompletność danych: jeden kontrakt pokrycia współdzielony przez UI,
+  eksporty JSON/CSV i MCP. Metadane są dostępne od razu; agregaty są
+  kompletne dla załadowanego okna, a szczegółowe wiersze pozostają
+  w ograniczonym oknie i jest to jawnie raportowane
+  (`details_truncated`), nigdy cicho zerowane. Eksporty CSV niosą
+  nagłówek `X-Mission-Control-Coverage`. Szczegóły:
+  `docs/V6_COVERAGE.md`.
+- Języki: pełne słowniki angielski/polski (po 454 klucze), domyślnie
+  angielski, przełącznik w górnym pasku zapamiętywany między
+  odświeżeniami i zachowujący filtry, widok oraz inspektora.
+- Raport użycia: okresy dziś / 7 / 30 / 90 dni / ostatni rok / całość ze
+  współdzielonych agregatów, z kosztem zarejestrowanym vs szacowanym vs
+  nieznanym, panelami sesji i projektów oraz widokiem plików, którego
+  heurystyka równego przydziału jest oznaczona jako heurystyka
+  (nieprzypisane wiersze zostają jako `Unassigned`).
+- Serwowanie produkcyjne: `web/dist` z weryfikacją sha256 z manifestu
+  (patrz wyżej); `--dev-web` dla źródeł.
+- MCP: sposoby konfiguracji z sekcji poniżej bez zmian (lokalna
+  konfiguracja stdio z widoku Integracje, ChatGPT przez OAuth z
+  `public_origin` i dokładnym adresem callback); v6 dodaje kontrole
+  protokołu dla obu wspieranych wersji MCP, stabilne narzędzia
+  odczytu, warunkowe `report_event` i ściślejszą walidację.
+- Migracja stanu: `python -X utf8 opencode_dashboard.py --migrate-state --state-dir <katalog>`
+  podnosi katalog stanu v5 w jednej transakcji (kod wyjścia 0/1/2)
+  i zostawia kopię SQLite przed migracją
+  (`observer.sqlite.pre-migration-v1-to-v2-<timestamp>`); nowsze
+  schematy są odrzucane. Szczegóły: `docs/V6_MIGRATION.md`.
+- Rotacja tokenu: `python -X utf8 opencode_dashboard.py --rotate-owner-token --state-dir <katalog>`
+  atomowo podmienia tylko `owner.token`; baza, konfiguracja, `mcp.token`
+  i `pairing.key` zostają nietknięte. Uruchom przy zatrzymanym
+  obserwatorze; restart unieważnia wydane tokeny OAuth.
+- Liczby benchmarków: `docs/V6_BENCHMARKS.md`; stan implementacji:
+  `docs/V6_STATUS.md` i `docs/V6_HANDOFF.md`.
+
+Aby uruchomić v6 obok istniejącej instancji bez dotykania jej, użyj
+osobnego portu i katalogu stanu:
+
+```powershell
+py -3 opencode_dashboard.py --open --port 8780 --state-dir ".\state-v6"
+```
 
 ## Szybki start (Windows)
 
@@ -67,10 +115,9 @@ Przy zajętym porcie wybierz inny:
 py -3 opencode_dashboard.py --open --port 8766
 ```
 
-Linux działa tak samo przez `python3`. Zweryfikowano na razie na
-Windows / Python 3.14.3 (patrz `TEST_REPORT.json`); linuksowe CI puszcza
-tę samą suitę przy każdym pushu (`.github/workflows/ci.yml`,
-oczekuje na pierwszy zielony przebieg).
+Linux działa tak samo przez `python3`. Zweryfikowano na Windows /
+Python 3.14.3 dla 6.0.0 (patrz `TEST_REPORT.json`); linuksowe CI
+puszcza tę samą suitę przy każdym pushu (`.github/workflows/ci.yml`).
 
 ## Podłączenie istniejącego OpenCode
 

@@ -30,7 +30,7 @@ export const PL = {
   'side.connecting': 'Łączenie…',
   'side.footer.html': 'Statusy zawsze ze źródłem dowodu.<br>Żadnych wymyślonych workerów.',
   'version.line': 'MISSION CONTROL',
-  'version.tag': 'v5.0',
+  'version.tag': 'v6.0',
   'topbar.menu.open': 'Otwórz nawigację',
   'topbar.menu.close': 'Zamknij nawigację',
   'topbar.breadcrumb': 'Workspace',
@@ -45,7 +45,7 @@ export const PL = {
   'topbar.lang.title': 'Zmień język (English / Polski)',
   'page.connect': 'Podłącz źródła',
   'footer.local': 'DANE LOKALNE · JAWNE ŹRÓDŁA',
-  'footer.version': 'UglyDashboard / Mission Control 5.0',
+  'footer.version': 'UglyDashboard / Mission Control 6.0',
   'inspector.eyebrow': 'AGENT INSPECTOR',
   'inspector.title': 'Szczegóły sesji',
   'inspector.close.aria': 'Zamknij inspektor',
@@ -61,7 +61,7 @@ export const PL = {
   'login.submit': 'Otwórz przestrzeń pracy',
   'login.private.html':
     'Klucz pozostaje w tej karcie przeglądarki. Plik <code>owner.token</code> znajduje się w folderze <code>.opencode-mission-control</code>. Nie wysyłaj go w czacie.',
-  'login.version': 'MISSION CONTROL / v5.0',
+  'login.version': 'MISSION CONTROL / v6.0',
 
   'viewtag.observer': 'OBSERVER MODE',
   'viewtag.relations': 'VERIFIED RELATIONS',

@@ -22,9 +22,49 @@ observer, delete (or repair) the offending token file, start again; a
 fresh secret is created and corrupt bytes are quarantined to a `.bak`
 file. Permission/I-O failures leave credentials untouched.
 
-Rotate a leaked secret the same way: stop the observer, delete the token
-file, restart. Observer restart additionally invalidates issued OAuth
-tokens (client registrations are kept).
+Rotate the owner secret with the documented controlled procedure:
+
+```text
+python -X utf8 opencode_dashboard.py --rotate-owner-token --state-dir <state>
+```
+
+It atomically replaces **only** `owner.token` (no backup copy is kept) and
+preserves `observer.sqlite`, `config.json`, `mcp.token` and `pairing.key`. A
+running observer keeps the previous token in memory until it is restarted;
+restarting also invalidates issued OAuth access tokens (client registrations
+are kept). Rotate the production token after the earlier terminal-log
+exposure — but never execute it without the owner's approval.
+
+## Local HTTP surface
+
+Implemented protections, to be preserved:
+
+- Loopback-only default bind (`127.0.0.1`); serving outside loopback is an
+  explicit opt-in with `public_origin`.
+- Owner / MCP / OAuth token separation with constant-time comparisons.
+- `Host` and `Origin` allowlist (the configured `public_origin` is the only
+  additional allowed authority).
+- Bounded concurrency: 32 request slots, explicit 503 instead of hangs.
+- 1 MiB body limit; oversized bodies are drained to return a clean 400;
+  chunked bodies and invalid or non-finite JSON are rejected.
+- Per-IP rate limits: authorize 30/min, oauth 60/min, reveal 10/min,
+  general 80/min.
+- Strict response policy: CSP `default-src 'none'` with `'self'` scripts and
+  styles, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer`, `Cache-Control: no-store`.
+- Stateless MCP transport (POST only, no unsolicited SSE stream).
+- Exact-name static allowlist; directories, configuration, logs and secrets
+  are never served.
+- `POST /api/reveal` is owner-only, rate-limited and audited without recording
+  the secret value.
+- Abort requires `allow_abort` plus the exact typed native session ID;
+  shutdown requires the explicit `STOP OBSERVER` confirmation.
+- The path scanner is bounded (depth, 6000 directories, 12 s, no symlink
+  traversal, skips `auth.json` and `.env`).
+- `scripts/check_secrets.py` scans the repository and local evidence
+  directories, prints only path/line/label/length, and fails CI on a hit.
+- Translation dictionaries cannot weaken escaping: every rendered user or
+  source text remains HTML-escaped.
 
 ## Privilege boundaries
 

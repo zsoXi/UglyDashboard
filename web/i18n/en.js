@@ -31,7 +31,7 @@ export const EN = {
   'side.connecting': 'Connecting…',
   'side.footer.html': 'Statuses always carry evidence.<br>No invented workers.',
   'version.line': 'MISSION CONTROL',
-  'version.tag': 'v5.0',
+  'version.tag': 'v6.0',
   'topbar.menu.open': 'Open navigation',
   'topbar.menu.close': 'Close navigation',
   'topbar.breadcrumb': 'Workspace',
@@ -46,7 +46,7 @@ export const EN = {
   'topbar.lang.title': 'Change language (English / Polski)',
   'page.connect': 'Connect sources',
   'footer.local': 'LOCAL DATA · EXPLICIT SOURCES',
-  'footer.version': 'UglyDashboard / Mission Control 5.0',
+  'footer.version': 'UglyDashboard / Mission Control 6.0',
   'inspector.eyebrow': 'AGENT INSPECTOR',
   'inspector.title': 'Session details',
   'inspector.close.aria': 'Close inspector',
@@ -62,7 +62,7 @@ export const EN = {
   'login.submit': 'Open workspace',
   'login.private.html':
     'The key stays in this browser tab. The <code>owner.token</code> file lives in the <code>.opencode-mission-control</code> folder. Never send it in chat.',
-  'login.version': 'MISSION CONTROL / v5.0',
+  'login.version': 'MISSION CONTROL / v6.0',
 
   'viewtag.observer': 'OBSERVER MODE',
   'viewtag.relations': 'VERIFIED RELATIONS',
