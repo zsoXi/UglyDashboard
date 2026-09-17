@@ -33,11 +33,13 @@ from .core import (
     path_key,
     path_name,
     public_copy,
+    readonly_db,
     redact,
     stamp,
     validate_config,
     zero_usage,
 )
+from .incremental import AGGREGATE_BUDGET_SECONDS, aggregate_source
 from .sources import (
     JsonlReader,
     codex_apply,
@@ -471,6 +473,7 @@ class Engine:
             self.stop = threading.Event()
             self.wake = threading.Event()
             self.db_cache = {}
+            self._aggregate_state = {}
             self.codex_cache = {}
             self.router_cache = {}
             self.git_cache = {}
@@ -620,6 +623,7 @@ class Engine:
             if stale:
                 src["stale"] = True
                 src["error"] = note
+            self._aggregate_db_source(src, path, rows)
             projects.extend(dirs)
             for s in rows:
                 old = all_sessions.get(s["id"])
@@ -1026,9 +1030,82 @@ class Engine:
         for path in list(self.router_cache):
             if path not in router_paths:
                 del self.router_cache[path]
+        aggregate_sources = {"opencode:" + path_key(p) for p in db_paths}
+        for source_id in list(self._aggregate_state):
+            if source_id not in aggregate_sources:
+                del self._aggregate_state[source_id]
         for path in list(self.git_cache):
             if time.time() - self.git_cache[path][0] > self.GIT_CACHE_TTL:
                 del self.git_cache[path]
+
+    def _aggregate_db_source(self, src, path, rows):
+        """Commit budget-bounded usage aggregates for one OpenCode database.
+
+        Independently of the (bounded) detail window, every session's usage is
+        accumulated over all step-finish parts in ascending key order and the
+        cursor is persisted together with the counters, so a cycle can stop at
+        any page boundary without losing or double counting tokens. A cycle
+        resumes where the previous one stopped, so a finite source reaches full
+        coverage instead of stopping at the first deadline.
+        """
+        if not rows:
+            if src.get("ok"):
+                src.update(
+                    aggregates_complete=True,
+                    aggregate_sessions_complete=0,
+                    pending_sessions=0,
+                    details_truncated=False,
+                )
+            else:
+                src.update(aggregates_complete=False, pending_sessions=None)
+            return
+        source_id = "opencode:" + path_key(path)
+        checkpoints = self.store.checkpoints(source_id)
+        order = sorted(rows, key=lambda s: s.get("updated") or 0, reverse=True)
+        pairs = [(s["native_id"], s.get("updated") or 0) for s in order]
+        state = self._aggregate_state.setdefault(source_id, {"next_index": 0})
+        pending = {}
+        deadline = time.monotonic() + AGGREGATE_BUDGET_SECONDS
+        try:
+            with readonly_db(path) as con:
+                aggregate_source(
+                    con,
+                    pairs,
+                    checkpoints,
+                    deadline,
+                    lambda sid, st, _p=pending: _p.__setitem__(sid, st),
+                    state=state,
+                )
+            if pending:
+                self.store.put_checkpoints(source_id, list(pending.items()))
+        except Exception as e:
+            # Never publish aggregates we could not persist; the next cycle
+            # retries from the last committed checkpoint.
+            src["aggregate_error"] = redact(e, 160)
+            src["aggregates_complete"] = False
+            src["pending_sessions"] = None
+            return
+        complete = 0
+        for s in rows:
+            st = checkpoints.get(s["native_id"])
+            if st and st.get("complete"):
+                # Only override when the aggregate actually accounted for
+                # parts; sessions with no parts at all keep the reader's
+                # recorded fallback (message-level tokens) untouched.
+                if st.get("parts") and (st.get("usage") or {}).get("total"):
+                    s["usage"] = dict(st["usage"])
+                    s["usage_known"] = True
+                s["_aggregate_complete"] = True
+                complete += 1
+            else:
+                s["_aggregate_complete"] = False
+        expected = int(src.get("metadata_sessions") or len(rows))
+        src["aggregate_sessions_complete"] = complete
+        src["pending_sessions"] = max(0, expected - complete)
+        src["aggregates_complete"] = src["pending_sessions"] == 0
+        src["details_truncated"] = bool(src.get("truncated_sessions"))
+        if src["pending_sessions"]:
+            src["catching_up"] = True
 
     @staticmethod
     def summary(s):

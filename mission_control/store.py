@@ -59,6 +59,9 @@ class Store:
             CREATE TABLE IF NOT EXISTS report(id TEXT PRIMARY KEY, ts INTEGER NOT NULL, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS assessment(session_id TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS oauth_client(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS usage_checkpoint(source_id TEXT NOT NULL, item_id TEXT NOT NULL,
+                updated INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id, item_id));
+            CREATE INDEX IF NOT EXISTS usage_checkpoint_source ON usage_checkpoint(source_id);
         """)
         self.con.commit()
 
@@ -238,6 +241,39 @@ class Store:
             self.con.execute(
                 "INSERT INTO setting(key,data) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
                 (key, json.dumps(value, allow_nan=False)),
+            )
+
+    def checkpoints(self, source_id):
+        """Load the durable per-item usage checkpoints of one source."""
+        with self.lock:
+            rows = self.con.execute(
+                "SELECT item_id, data FROM usage_checkpoint WHERE source_id=?", (source_id,)
+            ).fetchall()
+        return {row["item_id"]: json.loads(row["data"]) for row in rows}
+
+    def put_checkpoints(self, source_id, items):
+        """Persist checkpoints in ONE transaction per call.
+
+        ``items`` is a sequence of (item_id, data). Writing the cursor and the
+        aggregate it belongs to atomically is what prevents an interrupted
+        cycle from losing or double-counting usage.
+        """
+        if not items:
+            return
+        ts = now_ms()
+        with self.lock, self.con:
+            self.con.executemany(
+                "INSERT INTO usage_checkpoint(source_id,item_id,updated,data) VALUES(?,?,?,?) "
+                "ON CONFLICT(source_id,item_id) DO UPDATE SET updated=excluded.updated, "
+                "data=excluded.data",
+                [(source_id, item_id, ts, json.dumps(data, allow_nan=False)) for item_id, data in items],
+            )
+
+    def delete_checkpoint(self, source_id, item_id):
+        with self.lock, self.con:
+            self.con.execute(
+                "DELETE FROM usage_checkpoint WHERE source_id=? AND item_id=?",
+                (source_id, item_id),
             )
 
     def events(self, items):

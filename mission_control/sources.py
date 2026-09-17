@@ -113,6 +113,7 @@ def read_opencode(path, limit=1000, budget_seconds=None):
                 raise
 
         processed = 0
+        processed_ids = set()
         for s in list(sessions.values()):
             # A non-positive budget must deterministically stop after the newest
             # session: comparing monotonic() > deadline is unreliable on coarse
@@ -327,16 +328,19 @@ def read_opencode(path, limit=1000, budget_seconds=None):
             if read_state["hit"]:
                 deadline_exceeded = True
                 break
+            processed_ids.add(s["native_id"])
             processed += 1
-        if deadline_exceeded:
-            # Keep only the newest fully-read sessions. Anything after the break
-            # was never detailed and would otherwise publish as empty ghosts.
-            sessions = {s["native_id"]: s for s in list(sessions.values())[:processed]}
         for s in sessions.values():
-            if not s["usage_known"]:
+            if s["native_id"] not in processed_ids:
+                # Not detailed within this cycle's budget: publish metadata only
+                # and let the durable usage checkpoints complete the aggregate
+                # incrementally, so no session silently disappears.
+                s["_pending_detail"] = True
+                s["warnings"].append("Usage is still being aggregated from history.")
+            if not s["usage_known"] and not s.get("_pending_detail"):
                 for t, ts, model, prov, cost in s.get("_message_usage", []):
                     record_usage(s, oc_usage(t, diag), ts, model, prov, cost)
-            if not s["usage_known"]:
+            if not s["usage_known"] and not s.get("_pending_detail"):
                 r = s["_rollup"]
                 if any(k in r for k in ("tokens_input", "tokens_output")):
                     u = {
@@ -388,7 +392,8 @@ def read_opencode(path, limit=1000, budget_seconds=None):
     aggregate_truncated = sum(1 for s in result if s.get("_aggregate_truncated"))
     coverage = {
         "total_sessions": total,
-        "loaded_sessions": len(result),
+        "metadata_sessions": len(result),
+        "loaded_sessions": len(processed_ids),
         "parts_loaded": parts_total,
         "truncated_sessions": truncated_sessions,
         "aggregate_truncated_sessions": aggregate_truncated,
