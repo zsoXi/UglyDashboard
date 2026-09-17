@@ -132,3 +132,40 @@ utrwala ten kontrakt: okno szczegółów jest przycinane do najnowszych
 części. `parts_loaded` pozostaje liczbą wczytanych szczegółów, a nowe
 `aggregate_truncated_sessions` mówi, czy dopełnianie agregatu nie
 zatrzymało się na budżecie odczytu.
+
+## Etap C — pełne pokrycie przyrostowe (OpenCode)
+
+Przyczyna wcześniejszego zatrzymania na części historii: odczyt
+szczegółów był ograniczony budżetem czasu, a sesje bez szczegółów nie
+trafiały w ogóle do publikacji. Kompletność liczono względem okna
+szczegółów, więc np. 188 z 1000 sesji mogło wyglądać na „kompletne”.
+
+Poprawka: metadane wszystkich sesji są publikowane niezależnie od
+szczegółów; sumy zużycia liczone są przyrostowo po **wszystkich**
+częściach `step-finish` w kolejności rosnącej, a kursor i suma są
+zapisywane razem w tabeli `usage_checkpoint` (`observer.sqlite`).
+Wykrywane jest dopisanie nowych części i przepisanie krótszej historii,
+cykl kończy budżet `AGGREGATE_BUDGET_SECONDS = 5 s`, a kolejny cykl
+kontynuuje od zapisanego kursora z rotacją sesji, więc jedna ogromna
+sesja nie blokuje pozostałych. Kompletność mierzona jest względem
+`metadata_sessions`, nie względem okna szczegółów.
+
+Dowód na danych syntetycznych (sumy pochodzą z niezależnej arytmetyki
+generatora, nie z ponownego wywołania funkcji produkcyjnej):
+
+| Zbiór            | Sesje | Suma oczekiwana | Suma otrzymana | Cykle | Pełne pokrycie | Restart |
+| ---------------- | ----: | --------------: | -------------: | ----: | -------------: | ------- |
+| 100 tys. zdarzeń | 1000/1000 | 12 347 213 | 12 347 213 | 1 | 9,5 s | identyczny |
+| 1 mln zdarzeń    | 1000/1000 | 126 001 216 | 126 001 216 | 6 | 103,6 s | identyczny |
+
+Restart w trakcie importu: suma częściowa (ok. 106–114 mln) została
+wznowiona dokładnie do 126 001 216, bez utraty i bez podwójnego
+zliczenia. Responsywność podczas importu: `overview` ok. 20 ms,
+analityka zimna 0,02–0,06 s, ciepła ok. 1 ms. Pamięć: szczyt
+`tracemalloc` 90 MB (100 tys.) i 270 MB (1 mln) alokacji Pythona; RSS
+niedostępny na tym hoście (raportowany jako `null`).
+
+Co pozostaje: przyrostowe discovery i deduplikacja po stronie Codexa
+oraz te same pola kompletności w API/UI/MCP dla Codexa; następnie
+Etap D (pełne EN/PL i widok zużycia) i Etap E (MCP, produkcyjny build,
+migracja, odbiór).

@@ -98,6 +98,38 @@ Codex:
   pokrycia przyrostowo, z deduplikacją po tożsamości sesji i kontrolą
   nakładających się korzeni (`~/.codex`, `~/.codex/browser`).
 
-Następny krok: Etap C — przyrostowe przetwarzanie do pełnego pokrycia
-(OpenCode i Codex), niezależność stanu live od backlogu historycznego oraz
-pola kompletności w API/UI/MCP.
+## Etap C — przyrostowe pełne pokrycie (OpenCode) — IMPLEMENTED AND VERIFIED
+
+Wdrożone:
+
+- trwała tabela `usage_checkpoint` w `observer.sqlite`
+  (`Store.checkpoints` / `put_checkpoints` / `delete_checkpoint`),
+- `mission_control/incremental.py`: `aggregate_session` (keyset ASC po
+  `(time_created, id)`, kursor i suma zatwierdzane razem, wykrywanie
+  dopisania i przepisania źródła) oraz `aggregate_source` (rotacja
+  `next_index`, aby jedna ogromna sesja nie blokowała pozostałych),
+- `Engine._aggregate_db_source` wywoływany w każdym `_poll` z budżetem
+  `AGGREGATE_BUDGET_SECONDS = 5,0`; sesje bez szczegółów pozostają
+  opublikowane jako metadane, a kompletność liczona jest względem
+  `metadata_sessions`, nie względem okna szczegółów.
+
+Dowody (syntetyczne zbiory; sumy oczekiwane z arytmetyki generatora, nie
+z ponownego wywołania readera):
+
+| Zbiór | Sesje uwzględnione | Suma zgodna ze wzorcem | Pełne pokrycie | Cykle | Restart |
+| --- | --- | --- | --- | --- | --- |
+| 100 tys. zdarzeń | 1000/1000 | 12 347 213 = 12 347 213 | 9,5 s | 1 | identyczna suma |
+| 1 mln zdarzeń | 1000/1000 | 126 001 216 = 126 001 216 | 103,6 s | 6 | identyczna suma |
+
+Restart w połowie importu: pierwszy cykl częściowy (~106–114 mln),
+wznowienie kończy import dokładnie na 126 001 216 — bez utraty i bez
+podwójnego doliczenia.
+
+Responsywność podczas importu: overview ~20 ms, analytics ciepła ~1 ms,
+zimna 0,02–0,06 s. Pamięć: tracemalloc szczyt 90 MB (100 tys.) i 270 MB
+(1 mln); pomiar RSS niedostępny na tym hoście (metoda raportowana jako
+null).
+
+Co pozostaje: przyrostowe discovery/dedup Codexa do pełnego pokrycia
+(oraz pola kompletności w API/UI/MCP), następnie Etap D (pełne EN/PL) i
+Etap E (MCP, build produkcyjny, migracja, odbiór).
