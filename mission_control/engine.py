@@ -40,6 +40,7 @@ from .core import (
     zero_usage,
 )
 from .incremental import AGGREGATE_BUDGET_SECONDS, aggregate_source
+from .migration import migrate_config
 from .sources import (
     JsonlReader,
     codex_apply,
@@ -664,7 +665,16 @@ class Engine:
             if self.config_path.exists():
                 raw = json.loads(self.config_path.read_text("utf-8"))
             else:
-                raw = default_config()
+                raw = {}
+            # Legacy v5 configuration files have no version marker. Known
+            # settings are preserved exactly; unknown keys are archived into the
+            # observer store instead of being silently dropped.
+            raw, archived = migrate_config(raw, set(default_config()))
+            if archived:
+                history = self.store.setting("migrated_config_backup", []) or []
+                history.append({"archived_at": now_ms(), "keys": archived})
+                self.store.set_setting("migrated_config_backup", history[-10:])
+                LOG.warning("Archived unknown legacy settings: %s", ", ".join(sorted(archived)))
             raw.update(overrides or {})
             self.cfg = validate_config(raw)
             self.lock = threading.RLock()

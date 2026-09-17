@@ -228,6 +228,55 @@ def rotate_owner_token(directory):
     return 0
 
 
+def _observer_running(state):
+    """True only when a healthy observer still answers on the recorded port."""
+    try:
+        runtime = json.loads((state / "runtime.json").read_text("utf-8"))
+        port = int(runtime["port"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    try:
+        health = local_json(f"http://127.0.0.1:{port}/health", timeout=1)
+    except Exception:
+        return False
+    return health.get("application") == "opencode-mission-control"
+
+
+def migrate_state(directory):
+    """Migrate only the private observer state directory and exit.
+
+    Never touches OpenCode or Codex source databases and never rotates a
+    credential. A running observer is refused because it holds the state open.
+    """
+    from .migration import MigrationError, SCHEMA_VERSION
+    from .store import Store
+
+    state = Path(directory).expanduser().resolve()
+    if _observer_running(state):
+        print(
+            "An observer instance is still answering on the recorded port. "
+            "Stop it before migrating its state directory."
+        )
+        return 2
+    try:
+        with Store(directory) as store:
+            report = store.migration
+    except MigrationError as ex:
+        print("Migration refused: " + str(ex))
+        return 1
+    if report.get("migrated"):
+        print(
+            f"Observer state migrated to schema v{report['version']} "
+            f"(was v{report['from_version']}). "
+            f"Backup: {report['backup'] or 'none needed (no existing rows)'}. "
+            "Database, settings and credentials were preserved; usage aggregates "
+            "are rebuilt incrementally by the next reads."
+        )
+    else:
+        print(f"Observer state is already at schema v{SCHEMA_VERSION}. Nothing to do.")
+    return 0
+
+
 def _reusable_instance(port, token):
     """True only for a healthy Mission Control app that accepts our owner token."""
     try:
@@ -331,12 +380,20 @@ def main():
         help="Rotate only the owner token in the state dir and exit. The database, "
         "configuration, mcp.token and pairing.key are preserved.",
     )
+    parser.add_argument(
+        "--migrate-state",
+        action="store_true",
+        help="Migrate the observer state directory to the current schema and exit. "
+        "Never touches OpenCode or Codex source databases.",
+    )
     parser.add_argument("--version", action="version", version=VERSION)
     args = parser.parse_args()
     if args.self_test:
         return builtin_self_test()
     if args.rotate_owner_token:
         return rotate_owner_token(args.state_dir)
+    if args.migrate_state:
+        return migrate_state(args.state_dir)
     if args.mcp_stdio:
         return stdio_bridge(args.state_dir)
     if args.report_event:

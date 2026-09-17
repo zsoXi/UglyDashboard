@@ -15,6 +15,7 @@ from .core import (
     path_key,
 )
 from .locking import secret_lock
+from .migration import migrate_store
 
 
 class SecretError(RuntimeError):
@@ -49,6 +50,15 @@ class Store:
         self._closed = False
         self.con = sqlite3.connect(self.path, check_same_thread=False, timeout=5)
         self.con.row_factory = sqlite3.Row
+        self.con.execute("PRAGMA journal_mode=WAL")
+        try:
+            # Versioned, transactional and idempotent: a legacy (v5-era) database
+            # is upgraded here, a current one is left exactly as it is. Source
+            # OpenCode/Codex databases are never involved.
+            self.migration = migrate_store(self.con)
+        except BaseException:
+            self.con.close()
+            raise
         self.con.executescript("""
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS event(seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
