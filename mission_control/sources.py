@@ -585,6 +585,9 @@ class JsonlReader:
     """Incremental complete-line reader. Handles append, rotation, truncation,
     same-size rewrites, split UTF-8, and long lines without unbounded allocation.
     Complete records are delivered once per file version; partial tails wait.
+    ``resolved`` is the position after the last fully resolved line, so a
+    restarted reader can resume there and re-read an unfinished tail instead of
+    losing it.
     """
 
     def __init__(self):
@@ -596,6 +599,8 @@ class JsonlReader:
         self.skipped = 0
         self.reset = False
         self.anchor = b""
+        self.resolved = 0
+        self.pending_start = 0
 
     def read(self, path, budget=16 * 1024 * 1024):
         st = Path(path).stat()
@@ -620,6 +625,8 @@ class JsonlReader:
             self.pending = b""
             self.discarding = False
             self.skipped = 0
+            self.resolved = 0
+            self.pending_start = 0
         self.identity, self.mtime = identity, st.st_mtime_ns
         records = []
         with open(path, "rb") as f:
@@ -630,22 +637,36 @@ class JsonlReader:
                 if not chunk:
                     break
                 consumed += len(chunk)
+                base = self.offset
                 self.offset += len(chunk)
                 pieces = chunk.split(b"\n")
+                pos = base
                 for i, piece in enumerate(pieces):
                     end = i < len(pieces) - 1
+                    line_end = pos + len(piece) + 1
                     if self.discarding:
                         if end:
                             self.discarding = False
+                            self.resolved = line_end
+                        pos += len(piece) + (1 if end else 0)
                         continue
+                    if not self.pending:
+                        # Position where the unfinished line starts; the safe
+                        # resume point if the line is never completed.
+                        self.pending_start = pos
                     self.pending += piece
                     if len(self.pending) > MAX_LINE:
                         self.pending = b""
                         self.skipped += 1
-                        self.discarding = not end
+                        if end:
+                            self.resolved = line_end
+                        else:
+                            self.discarding = True
                     elif end:
                         raw = self.pending
                         self.pending = b""
+                        # Only a line that reached its newline is resolved.
+                        self.resolved = line_end
                         try:
                             value = json.loads(raw, parse_constant=reject_json_constant)
                             if isinstance(value, dict):
@@ -653,6 +674,7 @@ class JsonlReader:
                         except (UnicodeDecodeError, ValueError):
                             if raw.strip():
                                 self.skipped += 1
+                    pos += len(piece) + (1 if end else 0)
         with open(path, "rb") as check:
             check.seek(max(0, self.offset - 128))
             self.anchor = check.read(min(128, self.offset))

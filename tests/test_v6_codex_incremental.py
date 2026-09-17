@@ -32,16 +32,19 @@ def _usage(total):
     }
 
 
-def _append_token(path, amount, stamp):
-    line = json.dumps(
+def _token_line(amount, stamp):
+    return json.dumps(
         {
             "timestamp": stamp,
             "type": "event_msg",
             "payload": {"type": "token_count", "info": {"total_token_usage": _usage(amount)}},
         }
     ) + "\n"
+
+
+def _append_token(path, amount, stamp):
     with open(path, "a", encoding="utf-8") as handle:
-        handle.write(line)
+        handle.write(_token_line(amount, stamp))
 
 
 def _write_session(home, session_id, total_tokens, created, when):
@@ -265,6 +268,62 @@ class CodexIncrementalTests(unittest.TestCase):
         self.assertEqual(restarted.codex_cache[str(path)]["reader"].offset, path.stat().st_size)
         restarted.poll()
         self.assertEqual(self._tokens(restarted), 300)
+
+
+    def test_partial_line_survives_restart_and_applies_once(self):
+        home = str(self.root / "codex-home")
+        path = _write_session(home, "partial-line", 100, 1_700_000_000, "fixed")
+        line = _token_line(300, 1_700_000_700)
+        split = len(line) // 2
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line[:split])
+        engine = mc.Engine(self.root / "state", self._config(limit=SMALL_BATCH))
+        self.addCleanup(engine.close)
+        engine.poll()
+        self.assertEqual(self._tokens(engine), 100)
+        self.assertFalse(self._codex_source(engine)["aggregates_complete"])
+        engine.close()
+        restarted = mc.Engine(self.root / "state", self._config(limit=SMALL_BATCH))
+        self.addCleanup(restarted.close)
+        restarted.poll()
+        self.assertEqual(self._tokens(restarted), 100)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line[split:])
+        for _ in range(3):
+            restarted.poll()
+            if self._codex_source(restarted)["aggregates_complete"]:
+                break
+        self.assertEqual(self._tokens(restarted), 300)
+        restarted.close()
+        settled = mc.Engine(self.root / "state", self._config(limit=SMALL_BATCH))
+        self.addCleanup(settled.close)
+        settled.poll()
+        self.assertEqual(self._tokens(settled), 300)
+
+    def test_append_while_stopped_keeps_the_last_total(self):
+        home = str(self.root / "codex-home")
+        path = _write_session(home, "offline-append", 100, 1_700_000_000, "one")
+        filler = json.dumps({"type": "padding", "payload": {"text": "x" * 524288}}) + "\n"
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(filler * 34)
+            handle.write(_token_line(300, 1_700_000_600))
+        engine = mc.Engine(self.root / "state", self._config(limit=SMALL_BATCH))
+        self.addCleanup(engine.close)
+        for _ in range(6):
+            engine.poll()
+            if self._codex_source(engine)["aggregates_complete"]:
+                break
+        self.assertEqual(self._tokens(engine), 300)
+        engine.close()
+        _append_token(path, 400, 1_700_000_700)
+        restarted = mc.Engine(self.root / "state", self._config(limit=SMALL_BATCH))
+        self.addCleanup(restarted.close)
+        restarted.poll()
+        first = self._tokens(restarted)
+        self.assertGreaterEqual(first, 300)
+        self.assertEqual(first, 400)
+        restarted.poll()
+        self.assertEqual(self._tokens(restarted), 400)
 
 
 if __name__ == "__main__":

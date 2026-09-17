@@ -292,6 +292,9 @@ def codex_session_payload(s):
     }
 
 
+READER_VERSION = 2
+
+
 def _restore_codex_item(path, saved):
     """Rebuild a cached Codex item from a durable checkpoint.
 
@@ -311,9 +314,13 @@ def _restore_codex_item(path, saved):
         s[key] = copy.deepcopy(value)
     s["usage_known"] = bool(s.get("usage_known") or s["usage"].get("total"))
     reader = JsonlReader()
+    # Only a checkpoint written by the safe reader format may resume from an
+    # offset: earlier states stored a mid-line position whose unfinished tail
+    # was never persisted, so those files are read again from the start.
     offset = saved.get("offset")
-    if isinstance(offset, int) and offset > 0:
+    if saved.get("reader_version") == READER_VERSION and isinstance(offset, int) and offset > 0:
         reader.offset = offset
+        reader.resolved = offset
         identity = saved.get("identity")
         if isinstance(identity, (list, tuple)) and len(identity) == 2:
             reader.identity = (identity[0], identity[1])
@@ -1060,19 +1067,40 @@ class Engine:
         codex_diag = Diagnostics()
         for path in files:
             try:
-                item = self.codex_cache.setdefault(
-                    path,
-                    {"reader": JsonlReader(), "session": make_session("codex", Path(path).stem)},
-                )
-                item.pop("restored", False)
+                item = self.codex_cache.get(path)
+                if item is None:
+                    # A file changed while the observer was down must continue
+                    # from its durable checkpoint like any other change; only a
+                    # checkpoint without usable state starts from zero.
+                    item = _restore_codex_item(path, done_checkpoints.get(path) or {})
+                    if item is None:
+                        item = {
+                            "reader": JsonlReader(),
+                            "session": make_session("codex", Path(path).stem),
+                        }
+                    self.codex_cache[path] = item
                 reader = item["reader"]
                 records = reader.read(path)
                 if reader.reset:
+                    if (item["session"].get("usage") or {}).get("total"):
+                        # Keep publishing the last good state while a rewrite is
+                        # rebuilt, so a partial re-read never lowers the total.
+                        item["fallback"] = item["session"]
                     item["session"] = make_session("codex", Path(path).stem)
                 s = codex_apply(item["session"], records, codex_diag)
                 skipped += reader.skipped
-                if reader.offset < Path(path).stat().st_size:
+                try:
+                    size_now = Path(path).stat().st_size
+                except OSError:
+                    size_now = reader.resolved
+                catching = reader.resolved < size_now
+                if catching:
                     catching_up += 1
+                if item.get("fallback") is not None:
+                    if catching:
+                        s = item["fallback"]
+                    else:
+                        item.pop("fallback", None)
                 s["_log"] = path
                 ss = copy.deepcopy(s)
                 if (
@@ -1115,18 +1143,25 @@ class Engine:
                 stat = Path(path).stat()
             except OSError:
                 continue
-            complete = item["reader"].offset >= stat.st_size
-            data = {"size": stat.st_size, "complete": complete}
+            # Only a state whose every read byte was folded into complete,
+            # accounted lines may be checkpointed; an unfinished tail (or an
+            # unfinished rebuild) keeps the previous good checkpoint instead.
+            complete = item["reader"].resolved >= stat.st_size
             if complete:
                 # Keep the processed session itself in the durable checkpoint so
                 # a restart can publish every accounted Codex session without
                 # re-reading unchanged logs and without inventing totals.
-                data["session"] = codex_session_payload(item["session"])
-                data["mtime_ns"] = stat.st_mtime_ns
-                data["offset"] = item["reader"].offset
+                data = {
+                    "size": stat.st_size,
+                    "complete": True,
+                    "session": codex_session_payload(item["session"]),
+                    "mtime_ns": stat.st_mtime_ns,
+                    "offset": item["reader"].resolved,
+                    "reader_version": READER_VERSION,
+                }
                 if item["reader"].identity:
                     data["identity"] = list(item["reader"].identity)
-            updates[path] = data
+                updates[path] = data
         if updates:
             self.store.put_checkpoints("codex", list(updates.items()))
         done_checkpoints.update(updates)

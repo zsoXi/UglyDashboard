@@ -66,7 +66,13 @@ contract:
   written before mtime tracking existed are re-read once and then re-verified
   like any other. A restored reader continues from the durable offset and the
   checkpoint keeps the cumulative counter (`_cumulative`), so appended
-  cumulative readings apply as deltas without double counting.
+  cumulative readings apply as deltas without double counting. The checkpoint
+  stores a safe position after the last complete line (`resolved`): an
+  unfinished trailing line is read again from that position and closed exactly
+  once, and completeness is claimed only when every read byte forms complete
+  lines. A file changed while the observer was stopped is restored from its
+  checkpoint in the read path too, and a rebuild publishes the last good state
+  instead of a lower partial sum.
 * OpenCode parts: part rows are treated as append-only. Completed sessions are
   re-verified with a revision (row count, `MAX(rowid)`, total payload bytes,
   `MAX(time_created)`) plus a bounded content probe of the newest up to four

@@ -94,9 +94,23 @@ isolated V6 worktree; the running v5 instance was not modified.
   cap) are partial by design and labelled as such; they are not presented as
   full analytics.
 
+### Incremental read correctness (E.8)
+
+- Codex restart, partial line: the durable checkpoint represents a consistent
+  reader state (a safe offset after the last complete line, `resolved`). An
+  unfinished trailing line is read again from that position and closed exactly
+  once, `complete`/`aggregates_complete` are not claimed while any read byte is
+  still an open line, and a finished file resumes from the checkpoint without
+  re-reading its history.
+- Codex restart, append while stopped: a file changed while the observer was
+  off is restored from its checkpoint (offset, identity, mtime, cumulative
+  counter) in the read path too, and a rebuild publishes the last good state
+  instead of a lower partial sum, so the first poll after a restart shows the
+  current total rather than a re-read from zero.
+
 ### Numbers
 
-- Python: 195 tests, 0 failures, 2 environmental skips, 0 ResourceWarnings.
+- Python: 197 tests, 0 failures, 2 environmental skips, 0 ResourceWarnings.
 - Browser: Playwright 38/38 on the production `dist`.
 - Benchmarks (expectations from the generator): 1000 sessions / 100k events =
   12 347 213 tokens exact, full coverage 10.6 s (1 cycle); 1000 sessions /
