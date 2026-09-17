@@ -104,7 +104,7 @@ test('timeline searches and paginates through the more cursor', async ({ page })
 
 test('analytics aggregates fixture token usage', async ({ page }) => {
   await goView(page, 'analytics');
-  await expect(page.locator('#analytics-results')).not.toContainText('Obliczanie', {
+  await expect(page.locator('#analytics-results')).not.toContainText('Calculating', {
     timeout: 15_000,
   });
   await expect(page.locator('#analytics-results')).toContainText('fx-');
@@ -117,7 +117,7 @@ test('alerts show fixture budget signals and acknowledge works', async ({ page }
   await expect(page.locator('#view')).toContainText('budget');
   const ack = page.locator('#view .alert .actions button[data-ack]').first();
   await ack.click();
-  await expect(page.locator('#toasts .toast')).toContainText('Przyjęto alert');
+  await expect(page.locator('#toasts .toast')).toContainText('Alert acknowledged');
 });
 
 test('integrations show sources and scan results without leaking secrets', async ({ page }) => {
@@ -157,7 +157,7 @@ test('settings config edit saves, persists across reload and is restored', async
     cfg.poll_seconds = editedValue;
     await editor.fill(JSON.stringify(cfg, null, 2));
     await page.locator('#config-save').click();
-    await expect(page.locator('#config-status')).toContainText('Zapisano');
+    await expect(page.locator('#config-status')).toContainText('Saved');
     // Server-side persistence, independent of the editor DOM.
     await expect.poll(async () => (await getConfig()).poll_seconds).toBe(editedValue);
     // A full reload proves the value survived a fresh read of config.json.
@@ -175,26 +175,77 @@ test('settings config edit saves, persists across reload and is restored', async
   }
 });
 
-test('incomplete large-history coverage is marked explicitly, not hidden', async ({ page }) => {
+const COVERAGE_BASE = {
+  scope: { kind: 'snapshot', window_limit: 1000, sessions_loaded: 96 },
+  metadata_complete: false,
+  aggregates_complete: true,
+  history_limited: true,
+  breakdowns: { daily: 'partial', model: 'partial', file: 'partial' },
+  breakdown_details: { sessions_scored: 96 },
+  details_truncated: true,
+  detail_events_evicted: 21438,
+  catching_up: false,
+  source_stale: false,
+  read_blocked: false,
+  discovered_sessions: 1000,
+  processed_sessions: 1000,
+  last_successful_read_at: 1737000000000,
+};
+
+/** @param {import('@playwright/test').Page} page @param {object} coverage */
+async function mockCoverage(page, coverage) {
   await page.route('**/api/overview*', async (route) => {
     const response = await route.fetch();
     const body = await response.json();
-    body.coverage = [
-      {
-        label: 'OpenCode SQLite',
-        total_sessions: 1000,
-        loaded_sessions: 96,
-        parts_loaded: 95808,
-        truncated: true,
-        deadline_exceeded: true,
-      },
-    ];
+    body.coverage = coverage;
     await route.fulfill({ response, json: body });
   });
   await page.reload();
   await page.locator('#login').waitFor({ state: 'hidden' });
+}
+
+test('complete totals with limited details stay informational, not an alarm', async ({
+  page,
+}) => {
+  await mockCoverage(page, COVERAGE_BASE);
   const notice = page.locator('.coverage-note');
   await expect(notice).toBeVisible();
-  await expect(notice).toContainText('Statystyki niepełne');
-  await expect(notice).toContainText('96 z 1000 sesji');
+  await expect(notice).toContainText('Usage totals are complete');
+  await expect(notice).toContainText('Detailed history is limited');
+  await expect(notice).toContainText('Partial breakdowns');
+  await expect(notice).toContainText('Only the newest');
+  await expect(notice).not.toHaveClass(/coverage-degraded/);
+});
+
+test('incomplete aggregates are marked explicitly, not hidden', async ({ page }) => {
+  await mockCoverage(page, {
+    ...COVERAGE_BASE,
+    aggregates_complete: false,
+    catching_up: true,
+    processed_sessions: 96,
+  });
+  const notice = page.locator('.coverage-note');
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText('Import is still running');
+  await expect(notice).toHaveClass(/coverage-degraded/);
+});
+
+test('a blocked source never claims completeness', async ({ page }) => {
+  await mockCoverage(page, {
+    ...COVERAGE_BASE,
+    metadata_complete: null,
+    aggregates_complete: false,
+    history_limited: false,
+    details_truncated: false,
+    breakdowns: { daily: 'unknown', model: 'unknown', file: 'unknown' },
+    detail_events_evicted: 0,
+    read_blocked: true,
+    discovered_sessions: null,
+    processed_sessions: null,
+  });
+  const notice = page.locator('.coverage-note');
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText('cannot be read right now');
+  await expect(notice).toHaveClass(/coverage-degraded/);
+  await expect(notice).not.toContainText('Usage totals are complete');
 });

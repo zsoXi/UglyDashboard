@@ -50,6 +50,8 @@ PAGE = _web_asset(
 )
 JS = _web_asset("app.js", "")
 CSS = _web_asset("style.css", "")
+# Exact-name allowlist for the offline i18n modules the page imports.
+I18N_ASSETS = {name: _web_asset("i18n/" + name, "") for name in ("en.js", "pl.js", "core.js")}
 
 
 class Server(ThreadingHTTPServer):
@@ -363,6 +365,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/style.css":
                 self.send(200, CSS, "text/css; charset=utf-8")
+                return
+            if path.startswith("/i18n/"):
+                asset = I18N_ASSETS.get(path[len("/i18n/") :])
+                if asset:
+                    self.send(200, asset, "text/javascript; charset=utf-8")
+                else:
+                    self.send(404, {"error": "Not found"})
                 return
             if path == "/health":
                 self.send(

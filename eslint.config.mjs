@@ -4,8 +4,8 @@ import globals from 'globals';
 export default [
   { ignores: ['web/dist/**', 'artifacts/**', '.venv/**', 'node_modules/**'] },
   {
-    files: ['web/app.js'],
-    languageOptions: { ecmaVersion: 'latest', sourceType: 'script', globals: globals.browser },
+    files: ['web/app.js', 'web/i18n/*.js'],
+    languageOptions: { ecmaVersion: 'latest', sourceType: 'module', globals: globals.browser },
     rules: {
       ...js.configs.recommended.rules,
       'no-unused-vars': ['error', { argsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],

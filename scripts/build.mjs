@@ -11,6 +11,7 @@ await mkdir(dist, { recursive: true });
 await build({
   entryPoints: [path.join(web, 'app.js')],
   outfile: path.join(dist, 'app.js'),
+  bundle: true,
   minify: true,
   target: 'es2022',
   charset: 'utf8',
