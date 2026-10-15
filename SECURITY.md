@@ -4,7 +4,7 @@ Single-owner local observer. There is no multi-user model: whoever holds
 the owner key controls the panel, and the panel must never be exposed
 to the internet without a properly configured TLS layer and traffic
 restrictions in front of it. This file states the controls as
-implemented, not as audited — no independent security audit exists.
+implemented, not as audited. No independent security audit exists.
 
 ## Credentials and where they live
 
@@ -16,7 +16,7 @@ Never commit, copy, or sync this directory. Secret files are written
 with `0o600` where the platform honours it; on Windows protection
 additionally depends on directory ACLs and the user account.
 
-Corrupt, empty or truncated secrets raise `SecretError` — never a silent
+Corrupt, empty or truncated secrets raise `SecretError`, never a silent
 rotation that could hide the problem. Recovery is explicit: stop the
 observer, delete (or repair) the offending token file, start again; a
 fresh secret is created and corrupt bytes are quarantined to a `.bak`
@@ -33,7 +33,7 @@ preserves `observer.sqlite`, `config.json`, `mcp.token` and `pairing.key`. A
 running observer keeps the previous token in memory until it is restarted;
 restarting also invalidates issued OAuth access tokens (client registrations
 are kept). Rotate the production token after the earlier terminal-log
-exposure — but never execute it without the owner's approval.
+exposure, but never execute it without the owner's approval.
 
 ## Local HTTP surface
 
@@ -81,7 +81,7 @@ Implemented protections, to be preserved:
 
 OpenCode databases open read-only; Codex logs, router ledgers and git
 are read, never written. The live OpenCode API is contacted only at
-explicitly configured loopback URLs — no port scanning, no second
+explicitly configured loopback URLs. No port scanning, no second
 server, no agent commands. The opt-in folder scanner is bounded (depth,
 6000 folders, 12 s, no symlink following) and never searches
 `auth.json` / `.env`. Known-secret-pattern redaction in prompts and tool

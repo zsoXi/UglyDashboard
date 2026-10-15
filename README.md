@@ -91,7 +91,7 @@ py -3 opencode_dashboard.py --open --port 8780 --state-dir ".\state-v6"
 
 Requires Python **3.10+**. Double-click `START_MISSION_CONTROL.cmd`
 (uses `pyw`/`pythonw` when available so no console window stays open),
-or from PowerShell — quote the path, installs often live under folders
+or from PowerShell (quote the path, installs often live under folders
 with spaces or `!` characters:
 
 ```powershell
@@ -101,7 +101,7 @@ py -3 "D:\Path With Spaces\MissionControl\opencode_dashboard.py" --open
 Default address: `http://127.0.0.1:8765`. The launcher opens an address
 whose fragment carries a one-time owner key; the key stays in that tab's
 `sessionStorage`. Never share the login-fragment URL. Closing the tab
-does **not** stop the observer — use **Settings → Stop observer**
+does **not** stop the observer. Use **Settings → Stop observer**
 (console: Ctrl+C). Restarting the launcher reopens the panel when app
 identity and owner key match.
 
@@ -123,7 +123,7 @@ Linux CI runs the same suite on every push (`.github/workflows/ci.yml`).
 ## Connecting your existing OpenCode
 
 Point the panel at your database (repeat `--db` for several). Example
-uses a placeholder — substitute your real username:
+uses a placeholder. Substitute your real username:
 
 ```powershell
 py -3 opencode_dashboard.py --open --db "$env:USERPROFILE\.local\share\opencode\opencode.db"
@@ -137,7 +137,7 @@ working. The panel never starts a second OpenCode server, never scans
 ports, never sends agent commands, and only talks to explicitly listed
 loopback addresses. If that server needs Basic Auth, export
 `OPENCODE_SERVER_PASSWORD` (and optional `OPENCODE_SERVER_USERNAME`) in
-the panel's environment — never paste passwords into URLs or chats.
+the panel's environment. Never paste passwords into URLs or chats.
 
 The reader adapts to the SQLite columns it finds instead of assuming one
 schema; an incompatible future schema surfaces in source health, it does
@@ -155,7 +155,7 @@ py -3 opencode_dashboard.py --open --codex-home "$env:USERPROFILE\.codex"
 Reading is incremental and tolerates unfinished JSONL lines, log
 rotation, partial UTF-8 and corrupt records; selection window and skips
 are reported. Local logs never show cloud-only work and are not a
-process-liveness probe. A turn-finished event means the turn finished —
+process-liveness probe. A turn-finished event means the turn finished,
 not that the task passed tests.
 
 ## Codex as a local MCP client
@@ -176,14 +176,14 @@ The stdio bridge does not spawn a second observer: it reads the port
 from `runtime.json` plus a separate local MCP token. The panel must be
 running. Use console `python.exe` for stdio even if the UI was started
 via `pythonw.exe`. An HTTP variant is also generated in the UI and needs
-`MISSION_CONTROL_MCP_TOKEN` in the Codex environment — keep it secret.
+`MISSION_CONTROL_MCP_TOKEN` in the Codex environment. Keep it secret.
 
 ## ChatGPT as a remote MCP client (manual setup)
 
 **Nothing here connects to your ChatGPT account automatically, and this
 bridge cannot magically read all your ChatGPT conversations.** Only
-calls that go through this bridge — plus events someone explicitly
-reports via `report_event` — are visible. Setup is on you:
+calls that go through this bridge, plus events someone explicitly
+reports via `report_event`, are visible. Setup is on you:
 
 1. Put a stable HTTPS tunnel or reverse proxy in front of the local
    panel port. The app neither installs nor opens one. Remote MCP works
@@ -241,7 +241,7 @@ Token math: cache/reasoning normalized per source; message records and
 their step-finish are not double-counted; cumulative Codex counters are
 not re-added per read; the router ledger stays separate (it can overlap
 native sessions). Session age is not model work time. File tables split
-session tokens evenly across noted files — labelled as allocation, not
+session tokens evenly across noted files, labelled as allocation, not
 measured per-edit cost. Cost comes from stored data or explicitly
 configured USD-per-million rates; there are no guessed built-in prices.
 
@@ -259,8 +259,8 @@ depth, 6000 folders, 12 s, no symlink following, `auth.json`/`.env`
 never searched. Results are checkbox-selected, monitoring starts only on
 separate approval. Sources are opened read-only; own state lives in
 `~/.opencode-mission-control` (`config.json`, `observer.sqlite`,
-`runtime.json`, logs, `owner.token`, `mcp.token`, `pairing.key`) — the
-three keys are confidential, never commit or sync that directory.
+`runtime.json`, logs, `owner.token`, `mcp.token`, `pairing.key`). The
+three keys are confidential. Never commit or sync that directory.
 
 Capped coverage (defaults; source limits are shown in the panel):
 
@@ -289,7 +289,7 @@ cycles; all network/database/git I/O happens **outside** `lock`, and
 published objects are copy-on-write swapped under `lock`. Lifecycle:
 construct → `start()` (background `poll()` loop) → `poll()` per cycle →
 `close()`; any use after shutdown raises `LifecycleError`. Corrupt local
-secrets raise `SecretError` instead of silently rotating — recovery is
+secrets raise `SecretError` instead of silently rotating. Recovery is
 explicit (delete the token file while stopped; a fresh secret is created
 on next start) and quarantines the corrupt bytes to a `.bak` file.
 
@@ -312,7 +312,7 @@ on next start) and quarantines the corrupt bytes to a `.bak` file.
 * CI (`.github/workflows/ci.yml`, Windows+Ubuntu × Python 3.10/3.14,
   Node 22, ruff/pinned, self-test, regressions, `npm run check`,
   required Playwright on both OSes with synthetic-only failure
-  evidence): **not yet run on GitHub** — no green claim until it is.
+  evidence): **not yet run on GitHub**, no green claim until it is.
 * Browser tests: `playwright.config.mjs` (MUSE-1), global setup spawns the
   synthetic fixture (`scripts/browser_fixture.py`, real Engine + Server,
   ephemeral data). **27/27 pass locally** (desktop + mobile) via
@@ -320,7 +320,7 @@ on next start) and quarantines the corrupt bytes to a `.bak` file.
   `docs/screenshots/`, extra captures stay under `artifacts/`.
 * Frontend gates (DS-1): `npm run lint`, `npm run typecheck` (strict),
   `npm run format:check` and `npm run build` (reproducible bundle) all
-  pass — re-verified locally 2026-09-16 (Windows, repo Node).
+  pass, re-verified locally 2026-09-16 (Windows, repo Node).
 
 ```powershell
 py -3 opencode_dashboard.py --self-test
@@ -347,5 +347,5 @@ log formats evolve independently of the MCP spec.
 
 `backup/opencode_dashboard_original.py` keeps the previously shipped
 file. Stop the new observer, keep its state dir aside, and restore the
-copy. OpenCode/Codex source data needs no restore — this app never
+copy. OpenCode/Codex source data needs no restore. This app never
 writes it.

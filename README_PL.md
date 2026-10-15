@@ -94,8 +94,8 @@ py -3 opencode_dashboard.py --open --port 8780 --state-dir ".\state-v6"
 
 Wymagany Python **3.10+**. Dwuklik `START_MISSION_CONTROL.cmd`
 (użyje `pyw`/`pythonw`, gdy dostępne, więc nie zostaje okno konsoli)
-albo z PowerShella — cytuj ścieżkę, instalacje często leżą w folderach
-ze spacjami lub znakami `!`:
+albo z PowerShella (cytuj ścieżkę, instalacje często leżą w folderach
+ze spacjami lub znakami `!`):
 
 ```powershell
 py -3 "D:\Ścieżka Ze Spacjami\MissionControl\opencode_dashboard.py" --open
@@ -104,7 +104,7 @@ py -3 "D:\Ścieżka Ze Spacjami\MissionControl\opencode_dashboard.py" --open
 Domyślny adres: `http://127.0.0.1:8765`. Launcher otwiera adres, którego
 fragment niesie jednorazowy klucz właściciela; klucz zostaje w
 `sessionStorage` tej karty. Nie udostępniaj adresu z fragmentem
-logowania. Zamknięcie karty **nie** zatrzymuje obserwatora — użyj
+logowania. Zamknięcie karty **nie** zatrzymuje obserwatora. Użyj
 **Ustawienia → Zatrzymaj obserwator** (konsola: Ctrl+C). Ponowny start
 launchera otworzy istniejący panel, gdy zgadza się tożsamość aplikacji
 i klucz właściciela.
@@ -122,7 +122,7 @@ puszcza tę samą suitę przy każdym pushu (`.github/workflows/ci.yml`).
 ## Podłączenie istniejącego OpenCode
 
 Wskaż panelowi bazę (`--db` można powtarzać). Przykład z symbolem
-zastępczym — podmień własną nazwę użytkownika:
+zastępczym. Podmień własną nazwę użytkownika:
 
 ```powershell
 py -3 opencode_dashboard.py --open --db "$env:USERPROFILE\.local\share\opencode\opencode.db"
@@ -136,7 +136,7 @@ pracuje. Panel nigdy nie startuje drugiego serwera OpenCode, nie skanuje
 portów, nie wysyła poleceń agentom i rozmawia tylko z jawnie wskazanymi
 adresami loopback. Jeśli serwer wymaga Basic Auth, wyeksportuj
 `OPENCODE_SERVER_PASSWORD` (i opcjonalne `OPENCODE_SERVER_USERNAME`) w
-środowisku panelu — haseł nie wkleja się do URL-i ani do czatu.
+środowisku panelu. Haseł nie wkleja się do URL-i ani do czatu.
 
 Czytnik dopasowuje się do zastanych kolumn SQLite zamiast zakładać jeden
 schemat; niezgodny przyszły schemat zgłosi się w zdrowiu źródeł, nie
@@ -155,7 +155,7 @@ Odczyt jest przyrostowy i znosi niedokończone linie JSONL, obrót logu,
 częściowe UTF-8 i uszkodzone rekordy; okno wyboru i pominięcia są
 raportowane. Lokalne logi nigdy nie pokazują prac wyłącznie chmurowych
 i nie są sondą żywotności procesu. Zdarzenie końca tury znaczy koniec
-tury — nie to, że zadanie przeszło testy.
+tury, nie to, że zadanie przeszło testy.
 
 ## Codex jako lokalny klient MCP
 
@@ -175,7 +175,7 @@ Most stdio nie tworzy drugiego obserwatora: czyta port z
 `runtime.json` plus osobny lokalny token MCP. Panel musi działać. Do
 stdio używaj konsolowego `python.exe`, nawet gdy UI startował przez
 `pythonw.exe`. Wariant HTTP też generuje się w UI i wymaga
-`MISSION_CONTROL_MCP_TOKEN` w środowisku Codexa — trzymaj go w tajemnicy.
+`MISSION_CONTROL_MCP_TOKEN` w środowisku Codexa. Trzymaj go w tajemnicy.
 
 ## ChatGPT jako zdalny klient MCP (konfiguracja ręczna)
 
@@ -247,7 +247,7 @@ wiadomości i odpowiadających im step-finish nie sumujemy podwójnie;
 narastających liczników Codexa nie doliczamy od nowa; rejestr routera
 jest osobny (może pokrywać się z sesjami natywnymi). Wiek sesji to nie
 czas pracy modelu. Tabele plików dzielą tokeny sesji równo między
-odnotowane pliki — oznaczone jako podział, nie pomiar kosztu edycji.
+odnotowane pliki, oznaczone jako podział, nie pomiar kosztu edycji.
 Koszt pochodzi z zapisanych danych albo z jawnie ustawionych cen
 USD-za-milion; nie ma zgadywanych cen wbudowanych.
 
@@ -266,8 +266,8 @@ dowiązaniami, `auth.json`/`.env` nigdy nie przeszukiwane. Wyniki
 zaznaczasz checkboxami, monitorowanie startuje dopiero osobną decyzją.
 Źródła otwierane są read-only; własny stan mieszka w
 `~/.opencode-mission-control` (`config.json`, `observer.sqlite`,
-`runtime.json`, logi, `owner.token`, `mcp.token`, `pairing.key`) — trzy
-klucze są poufne, tego katalogu nigdy nie commituj ani nie synchronizuj.
+`runtime.json`, logi, `owner.token`, `mcp.token`, `pairing.key`). Trzy
+klucze są poufne. Tego katalogu nigdy nie commituj ani nie synchronizuj.
 
 Limity pokrycia (domyślne; ograniczenia źródeł widać w panelu):
 
@@ -296,7 +296,7 @@ bazodanowy i gitowy dzieje się **poza** `lock`, a publikowane obiekty
 są podmieniane kopiuj-i-zamień pod `lock`. Cykl: konstrukcja →
 `start()` (pętla `poll()` w tle) → `poll()` na cykl → `close()`; użycie
 po zamknięciu rzuca `LifecycleError`. Uszkodzone lokalne sekrety rzucają
-`SecretError` zamiast cichej rotacji — odzysk jest jawny (usuń plik
+`SecretError` zamiast cichej rotacji. Odzysk jest jawny (usuń plik
 tokenu przy zatrzymanym obserwatorze; świeży sekret utworzy się przy
 starcie), a uszkodzone bajty lądują w kwarantannie (`.bak`).
 
@@ -319,7 +319,7 @@ starcie), a uszkodzone bajty lądują w kwarantannie (`.bak`).
 * CI (`.github/workflows/ci.yml`, Windows+Ubuntu × Python 3.10/3.14,
   Node 22, przypięty ruff, self-test, regresja, `npm run check`,
   wymagany Playwright na obu systemach z wyłącznie syntetycznymi
-  artefaktami błędów): **brak przebiegu na GitHubie** — nie twierdzimy,
+  artefaktami błędów): **brak przebiegu na GitHubie**, nie twierdzimy,
   że jest zielone, dopóki nie zostanie uruchomione.
 * Testy przeglądarkowe: `playwright.config.mjs` (MUSE-1), global setup
   stawia syntetyczny fixture (`scripts/browser_fixture.py`, prawdziwy
@@ -328,7 +328,7 @@ starcie), a uszkodzone bajty lądują w kwarantannie (`.bak`).
   lądują w `docs/screenshots/`, dodatkowe w `artifacts/`.
 * Bramki frontendu (DS-1): `npm run lint`, `npm run typecheck`
   (ścisły), `npm run format:check` oraz `npm run build` (odtwarzalny
-  bundle) przechodzą — zweryfikowano lokalnie 2026-09-16 (Windows, Node
+  bundle) przechodzą, zweryfikowano lokalnie 2026-09-16 (Windows, Node
   z tego repozytorium).
 
 ```powershell
@@ -356,5 +356,5 @@ formaty logów ewoluują niezależnie od specyfikacji MCP.
 
 `backup/opencode_dashboard_original.py` przechowuje wcześniej wydany
 plik. Zatrzymaj nowy obserwator, odłóż jego katalog stanu i przywróć
-kopię. Źródłowych danych OpenCode/Codexa nie trzeba przywracać — ta
+kopię. Źródłowych danych OpenCode/Codexa nie trzeba przywracać. Ta
 aplikacja ich nigdy nie zapisuje.

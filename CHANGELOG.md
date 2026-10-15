@@ -1,6 +1,6 @@
 # Changelog
 
-## 6.0.0 — Mission Control V6
+## 6.0.0: Mission Control V6
 
 Working branch: `feat/mission-control-v6`. Implemented and verified in the
 isolated V6 worktree; the running v5 instance was not modified.
@@ -46,7 +46,7 @@ isolated V6 worktree; the running v5 instance was not modified.
 
 - The observer serves the built artifact from `web/dist` and verifies every
   file against `web/dist/manifest.json` (sha256). A missing or mismatched build
-  yields a readable instruction page and 503 for assets — never a silent
+  yields a readable instruction page and 503 for assets, never a silent
   fallback to unbuilt sources.
 - `--dev-web` explicitly serves `web/` sources (with an exact-name `/i18n/*`
   allowlist); the browser suite rebuilds the bundle before testing.
@@ -119,7 +119,7 @@ isolated V6 worktree; the running v5 instance was not modified.
   double counting). Memory is reported as tracemalloc peak (90 MB / 243 MB);
   process RSS is unavailable on this host (`null`).
 
-## 5.0.0 — hardening + redesigned UI
+## 5.0.0: hardening + redesigned UI
 
 Working branch `fix/mission-control-v5-hardening-ui`. Only executed runs
 are claimed; unverified items stay marked pending.
@@ -156,14 +156,14 @@ Pending / not claimed:
 * Real ChatGPT/Codex account login and the `frontend-design` plugin were
   not verified; no claim is made about them.
 
-## 4.0.0 — prior baseline
+## 4.0.0: prior baseline
 
 Single-owner local observer: command center, ChatGPT MCP bridge with
 OAuth/PKCE + DCR, Codex log reader, agent graph (120-node view),
 shared event history, inspector with owner assessments,
 source scanner, model/cost analytics, alerting, project overview.
 Measured then on Linux/Python: 91 regression tests, 10 built-in
-self-tests, 25 Chromium UI checks against synthetic fixtures only —
-no Windows run, no real user database, no end-to-end account login,
+self-tests, 25 Chromium UI checks against synthetic fixtures only.
+No Windows run, no real user database, no end-to-end account login,
 no independent security audit. See the v4-era notes preserved in
 `README.md` / `README_PL.md` verification sections.

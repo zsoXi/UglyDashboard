@@ -26,10 +26,10 @@ truncation is recorded in the `coverage_*` fields.
 
 What is timed (wall clock, `perf_counter`):
 
-* `parse_cold_seconds` — `read_opencode()` straight against the fixture.
-* `poll_cold_seconds` — one cold `Engine.poll()` on a fresh state dir,
+* `parse_cold_seconds`: `read_opencode()` straight against the fixture.
+* `poll_cold_seconds`: one cold `Engine.poll()` on a fresh state dir,
   untraced, exactly as production runs it.
-* `analytics_cold_seconds` / `analytics_warm_seconds` — first
+* `analytics_cold_seconds` / `analytics_warm_seconds`: first
   `Engine.analytics()` (aggregation) and second call (ordered-dict cache
   hit, `ANALYTICS_CACHE_MAX=16`).
 
@@ -49,18 +49,18 @@ pre-fix JSONs (`result-win-py314.json`, `result-win-py314-1m.json`) are
 kept unchanged for before/after evidence; the post-fix runs are the
 separate `*-after.json` files below, produced with the same script and
 defaults. The post-fix stress run still does not load the full
-1000-session history inside the budget — that is a deliberate, recorded
+1000-session history inside the budget. That is a deliberate, recorded
 limit, not a silent failure (see the coverage fields and the UI
 `Statystyki niepełne` notice).
 
-## Pre-fix results — Windows, Python 3.14.3 (2026-09-16)
+## Pre-fix results: Windows, Python 3.14.3 (2026-09-16)
 
 ### Default: 1000 sessions / 100000 events (`result-win-py314.json`)
 
 * Fixture: 24.8 MB SQLite, generated in ~0.6 s.
 * Cold parse (`read_opencode`): ~1.4 s, full coverage, no truncation.
-* Cold `Engine.poll()`: **12.0 s on re-run (29.2 s on first run)** —
-  the DB read is ~1.4 s of that; the rest is Engine overhead
+* Cold `Engine.poll()`: **12.0 s on re-run (29.2 s on first run)**.
+  The DB read is ~1.4 s of that; the rest is Engine overhead
   (snapshotting plus per-session observer-store writes). Single-number
   timings on this machine vary run to run; treat the range as the result.
 * Analytics cold ~0.02 s, warm ~0.001–0.003 s (cache works as designed).
@@ -81,7 +81,7 @@ limit, not a silent failure (see the coverage fields and the UI
 * Reported to DS-2 in `artifacts/team/muse2/CROSS_SCOPE.md`; not edited
   here (Python collectors are DS-2 owned).
 
-## Post-fix results — Windows, Python 3.14.3 (2026-09-16)
+## Post-fix results: Windows, Python 3.14.3 (2026-09-16)
 
 ### 1000 sessions / 100000 events (`result-win-py314-after.json`)
 
@@ -107,7 +107,7 @@ limit, not a silent failure (see the coverage fields and the UI
 * **Known limit, accepted and marked:** a full cold read of all 1000
   sessions at ~0.13 s/session would take ~100 s+ and defeat the 10 s
   soft budget whose purpose is to never blank the view. The UI shows
-  "Statystyki niepełne — to nie cała historia. … niepełne: 96 z 1000
+  "Statystyki niepełne: to nie cała historia. … niepełne: 96 z 1000
   sesji (przekroczono limit odczytu)". No claim of a full 1000-session
   load is made for the stress fixture.
 

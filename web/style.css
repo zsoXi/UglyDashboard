@@ -1869,7 +1869,7 @@ code {
   }
 }
 
-/* UglyDashboard v5 — operational UI, system fonts, no remote assets. */
+/* UglyDashboard v5: operational UI, system fonts, no remote assets. */
 :root {
   color-scheme: dark;
   --bg: #111416;

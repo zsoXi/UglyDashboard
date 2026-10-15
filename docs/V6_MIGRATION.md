@@ -32,7 +32,7 @@ Nothing is rewritten and no row is dropped:
 ## What is never touched
 
 * OpenCode SQLite databases and Codex session logs (read-only sources).
-* `owner.token`, `mcp.token`, `pairing.key` — byte-identical before and after;
+* `owner.token`, `mcp.token`, `pairing.key`: byte-identical before and after;
   no secret is created, rotated or quarantined by the migration.
 * `observer.sqlite-wal` / `observer.sqlite-shm` sidecars are never deleted and
   never copied alone. Backups use the SQLite backup API, which produces a
@@ -54,7 +54,7 @@ Restore procedure:
 
 1. Stop the observer instance that uses the directory.
 2. Keep the WAL sidecars (`observer.sqlite-wal`, `observer.sqlite-shm`)
-   in place or move them together with the main file — never a lone main file.
+   in place or move them together with the main file, never a lone main file.
 3. Copy the backup over `observer.sqlite`.
 4. Start the previous build again.
 
@@ -62,12 +62,12 @@ Restore procedure:
 
 The upgrade runs as one explicit SQL transaction (`BEGIN` … `COMMIT`). Python's
 sqlite3 module does not wrap DDL statements in an implicit transaction, so the
-migration issues an explicit `BEGIN` — this is what makes rollback real for the
+migration issues an explicit `BEGIN`. This is what makes rollback real for the
 `CREATE TABLE` as well.
 
 * If the process is interrupted or a write fails, the transaction is rolled
   back: no `usage_checkpoint` table and no `schema_version` row survive. (The
-  empty `meta` table itself may exist — it is created idempotently before the
+  empty `meta` table itself may exist. It is created idempotently before the
   transaction and carries no state.)
 * Re-running the migration on the same directory is safe and simply completes
   the upgrade. Migration is idempotent: a directory already at schema v2 is

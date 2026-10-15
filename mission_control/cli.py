@@ -307,7 +307,7 @@ def _serves_shell(port):
 
 def main():
     parser = argparse.ArgumentParser(
-        description=APP + " — local observer, single Python file, no packages required."
+        description=APP + ": local observer, single Python file, no packages required."
     )
     parser.add_argument(
         "db", nargs="?", help="Optional OpenCode SQLite path (old CLI compatibility)."

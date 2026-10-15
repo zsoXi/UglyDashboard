@@ -109,7 +109,7 @@ jobs:
       # Failure evidence only, synthetic fixture data only. Paths are
       # scoped to the Playwright report/test-results directories, which
       # never contain .fixture-info.json (owner token), pid files, or
-      # user logs — those live outside the uploaded directories.
+      # user logs. Those live outside the uploaded directories.
       - name: Upload browser failure evidence (synthetic only)
         if: failure()
         uses: actions/upload-artifact@v4

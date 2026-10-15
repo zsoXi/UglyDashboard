@@ -1,8 +1,8 @@
-# V6 — Handoff (stan końcowy, 2026-09-17, po E.4)
+# V6: Handoff (stan końcowy, 2026-09-17, po E.4)
 
 Dokument przekazania stanu V6. Publiczny: brak sekretów, brak
 prywatnych promptów, brak danych użytkownika. Ścieżki użytkownika podano
-jako `%USERPROFILE%` — nie kopiuj ich do repo.
+jako `%USERPROFILE%`. Nie kopiuj ich do repo.
 
 ## 1. Gdzie jest projekt
 
@@ -15,22 +15,22 @@ jako `%USERPROFILE%` — nie kopiuj ich do repo.
 
 Repo: `https://github.com/zsoXi/UglyDashboard`
 
-- PR v5: #1 (`fix/mission-control-v5-hardening-ui` → `main`) — otwarty.
-- PR V6: #2 (draft) — baza `fix/mission-control-v5-hardening-ui`, head
+- PR v5: #1 (`fix/mission-control-v5-hardening-ui` → `main`), otwarty.
+- PR V6: #2 (draft), baza `fix/mission-control-v5-hardening-ui`, head
   `feat/mission-control-v6`.
 
 ## 2. Stan wykonania
 
 | Etap | Status | Dowód |
 | --- | --- | --- |
-| A–C — izolacja, sekrety, przyrostowe pokrycie | IMPLEMENTED AND VERIFIED | commity `ac4d70f`, `5fe314a`, `b4941dd`, `b105ecf`; `docs/V6_RECONCILIATION.md` |
-| C.1 — kontrakt kompletności | IMPLEMENTED AND VERIFIED | `c7e8bca`; `tests/test_v6_coverage.py` |
-| D.1 — English / Polski | IMPLEMENTED AND VERIFIED | `8459551`; 454 klucze EN = 454 PL |
-| D.2 — raport zużycia | IMPLEMENTED AND VERIFIED | `fd0088a`; `tests/browser/usage.spec.mjs` |
-| E.1 — produkcyjny `dist` | IMPLEMENTED AND VERIFIED | `fbdb4a9`; `tests/test_v6_dist.py` |
-| E.2 — migracja stanu | IMPLEMENTED AND VERIFIED | `d775849`; `tests/test_v6_migration.py`; `docs/V6_MIGRATION.md` |
-| E.3 — MCP i bezpieczeństwo | IMPLEMENTED AND VERIFIED | `eaefb75`; `tests/test_v6_mcp.py` |
-| E.4 — odbiór końcowy | IMPLEMENTED AND VERIFIED | commit końcowy; `TEST_REPORT.json`, `docs/V6_COVERAGE.md`, `docs/V6_BENCHMARKS.md` |
+| A–C: izolacja, sekrety, przyrostowe pokrycie | IMPLEMENTED AND VERIFIED | commity `ac4d70f`, `5fe314a`, `b4941dd`, `b105ecf`; `docs/V6_RECONCILIATION.md` |
+| C.1: kontrakt kompletności | IMPLEMENTED AND VERIFIED | `c7e8bca`; `tests/test_v6_coverage.py` |
+| D.1: English / Polski | IMPLEMENTED AND VERIFIED | `8459551`; 454 klucze EN = 454 PL |
+| D.2: raport zużycia | IMPLEMENTED AND VERIFIED | `fd0088a`; `tests/browser/usage.spec.mjs` |
+| E.1: produkcyjny `dist` | IMPLEMENTED AND VERIFIED | `fbdb4a9`; `tests/test_v6_dist.py` |
+| E.2: migracja stanu | IMPLEMENTED AND VERIFIED | `d775849`; `tests/test_v6_migration.py`; `docs/V6_MIGRATION.md` |
+| E.3: MCP i bezpieczeństwo | IMPLEMENTED AND VERIFIED | `eaefb75`; `tests/test_v6_mcp.py` |
+| E.4: odbiór końcowy | IMPLEMENTED AND VERIFIED | commit końcowy; `TEST_REPORT.json`, `docs/V6_COVERAGE.md`, `docs/V6_BENCHMARKS.md` |
 
 Stan bieżący (zweryfikowany na końcowym stanie):
 
@@ -46,7 +46,7 @@ Stan bieżący (zweryfikowany na końcowym stanie):
 ## 3. Jak wznowić po resecie (kolejność)
 
 ```powershell
-# 1. Worktree (jeśli istnieje — nic nie rób; jeśli zniknie, odtwórz):
+# 1. Worktree (jeśli istnieje, nic nie rób; jeśli zniknie, odtwórz):
 git -C "<ścieżka do checkoutu v5>" fetch origin
 git -C "<ścieżka do checkoutu v5>" worktree add "<ścieżka do worktree V6>" feat/mission-control-v6
 
@@ -65,7 +65,7 @@ npx playwright test
 
 ## 4. Jak uruchomić V6
 
-- Świeży checkout działa bez Node — serwer domyślnie serwuje
+- Świeży checkout działa bez Node. Serwer domyślnie serwuje
   zacommitowany `web/dist` (weryfikacja sha256 z manifestu). Przykład
   obok działającej v5:
   `python -X utf8 opencode_dashboard.py --port 8780 --state-dir <katalog tymczasowy> --no-open`
@@ -82,28 +82,28 @@ npx playwright test
 
 ## 5. Artefakty i dowody
 
-- `TEST_REPORT.json` — końcowe liczby (wersja 6.0.0).
-- `docs/V6_STATUS.md` — tabela etapów i pomiary.
-- `docs/V6_MIGRATION.md` — migracja stanu.
-- `docs/V6_COVERAGE.md` — model danych i kontrakt kompletności.
-- `docs/V6_BENCHMARKS.md` — generator, metoda i wyniki 100k/1M.
-- `docs/V6_RECONCILIATION.md` — uzgodnienie OpenCode/Codex.
+- `TEST_REPORT.json`: końcowe liczby (wersja 6.0.0).
+- `docs/V6_STATUS.md`: tabela etapów i pomiary.
+- `docs/V6_MIGRATION.md`: migracja stanu.
+- `docs/V6_COVERAGE.md`: model danych i kontrakt kompletności.
+- `docs/V6_BENCHMARKS.md`: generator, metoda i wyniki 100k/1M.
+- `docs/V6_RECONCILIATION.md`: uzgodnienie OpenCode/Codex.
 - `scripts/check_i18n.mjs`, `scripts/check_secrets.py`,
   `scripts/benchmark_incremental.py`.
 - `tests/test_v6_*.py`, `tests/browser/*.spec.mjs`.
-- `docs/screenshots/` — zrzuty EN i PL (dane syntetyczne).
+- `docs/screenshots/`: zrzuty EN i PL (dane syntetyczne).
 
 ## 6. Rzeczy otwarte / wymagające decyzji użytkownika
 
 - **Rotacja produkcyjnego tokenu właściciela v5 NIE została wykonana**
-  (świadomie — wymaga zgody). Procedura: zatrzymać instancję,
+  (świadomie, wymaga zgody). Procedura: zatrzymać instancję,
   `python -X utf8 opencode_dashboard.py --rotate-owner-token --state-dir <stan>`,
   uruchomić ponownie z `--open`. Zachowuje bazę, konfigurację,
   `mcp.token` i `pairing.key`; restart unieważnia wydane tokeny OAuth.
 - **Rzeczywiste połączenie klientów MCP (ChatGPT/Codex) NIE zostało
-  zweryfikowane** — są lokalne testy protokołu; potrzebny test na
+  zweryfikowane**. Są lokalne testy protokołu; potrzebny test na
   realnym kliencie (checklista w E.3).
-- **Migracja, deploy i merge produkcji** — kod gotowy i przetestowany;
+- **Migracja, deploy i merge produkcji**. Kod gotowy i przetestowany;
   wykonanie i scalenie PR #2 wyłącznie za zgodą właściciela.
 
 ## 7. Stan instancji po resecie
@@ -111,6 +111,6 @@ npx playwright test
 Reset komputera zatrzyma działającą v5 na 8765. Po resecie uruchom ją
 ponownie z katalogu v5: `START_MISSION_CONTROL.cmd` albo
 `python -X utf8 opencode_dashboard.py --open` (uwaga: `--open` otwiera
-przeglądarkę z fragmentem `#access` — nie kopiuj tego adresu do czatu
+przeglądarkę z fragmentem `#access`, nie kopiuj tego adresu do czatu
 ani logów). Dashboard porównawczy na 8770 uruchamiasz ręcznie, jeśli
 będzie potrzebny.

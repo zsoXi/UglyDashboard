@@ -1,4 +1,4 @@
-# V6 — Uzgodnienie liczenia zużycia (OpenCode / Codex)
+# V6: Uzgodnienie liczenia zużycia (OpenCode / Codex)
 
 Dokument opisuje, skąd biorą się rozbieżności liczbowe raportowane między
 panelami, i co z tego wynika dla V6. Wszystkie liczby pochodzą z jednego,
@@ -17,7 +17,7 @@ spójnego materiału, przeliczonego niezależnym narzędziem kontrolnym.
 * „Adapter" oznacza rzeczywisty czytnik produktu (`read_opencode`), a nie
   uproszczoną atrapę.
 
-## OpenCode — dowód mechanizmu
+## OpenCode: dowód mechanizmu
 
 Materiał: 160 sesji, 66 201 części, 13 343 zdarzenia zużycia.
 
@@ -47,7 +47,7 @@ Pokrycie raportowane przez czytnik: `truncated_sessions = 2`,
 
 **Wniosek:** suma zużycia sesji zależy od limitu przechowywanych
 szczegółów. Starsze części `step-finish` są odcinane, a ich zużycie znika
-z sumy. To nie jest błąd zaokrągleń ani różnica modeli — to skutek
+z sumy. To nie jest błąd zaokrągleń ani różnica modeli. To skutek
 `MAX_OC_PARTS_PER_SESSION`.
 
 Ustalenie dodatkowe: na tym materiale suma tokenów z wiadomości
@@ -56,12 +56,12 @@ okno wiadomości kandydatem na tanie źródło pełnych sum, ale samo ma
 własny limit (`MAX_OC_MESSAGES_PER_SESSION = 800`), więc wymaga
 osobnego, udowodnionego kontraktu, a nie założenia.
 
-## Codex — różnica zakresu, nie tego samego pomiaru
+## Codex: różnica zakresu, nie tego samego pomiaru
 
 | Źródło | Wartość | Co to jest |
 | --- | ---: | --- |
 | v5 UI „Codex session logs" | 45 435 355 912 | suma silnika w oknie **400 plików** |
-| panel porównawczy | 9 581 676 500 | jego **syntetyzowany ledger routera** — inny zbiór danych |
+| panel porównawczy | 9 581 676 500 | jego **syntetyzowany ledger routera**, inny zbiór danych |
 | wszystkie lokalne pliki (pomiar) | **255 602 691 857** | 2184 pliki, 2182 unikalne sesje logiczne |
 | suma po unikalnych sesjach (`max`) | 255 585 986 156 | po deduplikacji wielu plików jednej sesji |
 
@@ -117,7 +117,7 @@ szczegółów, a suma zużycia obejmuje wszystkie części) ponowny pomiar na
 
 * `delta.uncapped_minus_adapter = 0.0`
 * `delta.uncapped_minus_message = 0.0`
-* `delta.capped_minus_adapter = −178 287 801` — tylko jako dowód, ile
+* `delta.capped_minus_adapter = −178 287 801`: tylko jako dowód, ile
   wynosiłby stary błąd na tym materiale.
 * Pokrycie czytnika: 161/161 sesji, `parts_loaded = 63 270`. Szczegóły
   pozostają ograniczone: `truncated = true` i 2 sesje z przyciętym oknem
@@ -133,7 +133,7 @@ części. `parts_loaded` pozostaje liczbą wczytanych szczegółów, a nowe
 `aggregate_truncated_sessions` mówi, czy dopełnianie agregatu nie
 zatrzymało się na budżecie odczytu.
 
-## Etap C — pełne pokrycie przyrostowe (OpenCode)
+## Etap C: pełne pokrycie przyrostowe (OpenCode)
 
 Przyczyna wcześniejszego zatrzymania na części historii: odczyt
 szczegółów był ograniczony budżetem czasu, a sesje bez szczegółów nie

@@ -94,7 +94,7 @@ def pad_activity(days):
     """Overlay recorded per-day usage onto the canonical 52-week window.
 
     All numeric keys are carried over (not just the OpenCode set), so the
-    Codex day breakdown — reqs/ok/err/err429/what_if — survives padding and
+    Codex day breakdown (reqs/ok/err/err429/what_if) survives padding and
     stays consistent between the per-day table, the heatmap and the
     period rollups. Totals are recomputed by each caller with the correct
     token semantics (local includes the separate cache stream, Codex input
@@ -155,7 +155,7 @@ def compute_streaks(activity, tokens_only=False):
 
     slots = list(activity or [])
     if slots and not active(slots[-1]):
-        slots = slots[:-1]  # today quiet so far — streak stands through yesterday
+        slots = slots[:-1]  # today quiet so far, streak stands through yesterday
     cur = 0
     for slot in reversed(slots):
         if active(slot):
@@ -240,7 +240,7 @@ def db_worktrees(db_path):
 
 
 def repo_heads(worktrees):
-    """Current HEAD per worktree — cheap git fingerprint for cache invalidation."""
+    """Current HEAD per worktree: cheap git fingerprint for cache invalidation."""
     heads = []
     seen = set()
     for _, wt in worktrees or []:
@@ -264,7 +264,7 @@ def repo_heads(worktrees):
 def collect_repo_commits(worktrees, per_repo=MAX_COMMITS_PER_REPO):
     """Recent commits per worktree: sha/subject/date/files/+/-.
 
-    Skips missing dirs and non-git worktrees silently — the panels simply
+    Skips missing dirs and non-git worktrees silently. The panels simply
     show fewer repos. Never raises for git failures.
     """
     commits = []
@@ -544,7 +544,7 @@ def query_stats(con):
         models[m]["cache"] += r["ca"]
         models[m]["cost"] += r["cost"]
 
-    # Most recent sessions only — the payload stays bounded and the detail
+    # Most recent sessions only. The payload stays bounded and the detail
     # endpoint fetches prompts on demand.
     sessions = []
     for r in con.execute(
@@ -711,7 +711,7 @@ def query_stats(con):
     totals["cache_rate"] = cache_rate(totals["tokens_input"], totals["tokens_cache_read"])
     totals["avg_tokens_per_session"] = round(total_tokens / totals["sessions"], 0) if totals["sessions"] else 0
 
-    # Records: biggest day / session / burn / streaks — pure tokens, fun to know.
+    # Records: biggest day / session / burn / streaks, pure tokens, fun to know.
     # Biggest session + fastest burn come from full-table queries (not the
     # capped recent-sessions list) so large histories still report all-time
     # bests accurately.
@@ -762,20 +762,20 @@ def query_stats(con):
 
     insights = [
         f"Across {totals['sessions']} sessions you used {total_tokens:,.0f} tokens in {totals['messages']:,} messages.",
-        f"Your biggest token day was {busiest} — {biggest_day['total']:,.0f} tokens across {biggest_day['sessions']} sessions."
+        f"Your biggest token day was {busiest}: {biggest_day['total']:,.0f} tokens across {biggest_day['sessions']} sessions."
         if biggest_day else "No activity recorded yet.",
-        f"Most-used model: {top_model[0]} — {top_model[1]['n']:,} sessions, {top_model[1]['ti'] + top_model[1]['to'] + top_model[1]['tr'] + top_model[1]['cache']:,.0f} tokens."
+        f"Most-used model: {top_model[0]}, {top_model[1]['n']:,} sessions, {top_model[1]['ti'] + top_model[1]['to'] + top_model[1]['tr'] + top_model[1]['cache']:,.0f} tokens."
         if top_model else "",
         f"The {top_agent[0]} agent did the heavy lifting with {top_agent[1]['n']} sessions and {top_agent[1]['toks']:,} tokens."
         if agents else "",
-        f"Top subsystem: {subsys_rows[0][0]} — {subsys_rows[0][1]:,.0f} tokens across {subsys_rows[0][2]} sessions."
+        f"Top subsystem: {subsys_rows[0][0]}, {subsys_rows[0][1]:,.0f} tokens across {subsys_rows[0][2]} sessions."
         if subsys_rows else "",
-        f"Priciest commit: “{(commit_rows[0][1] or '')[:60]}” — {commit_rows[0][7]:,.0f} tokens in the prior 24h."
+        f"Priciest commit: “{(commit_rows[0][1] or '')[:60]}”, {commit_rows[0][7]:,.0f} tokens in the prior 24h."
         if commit_rows and commit_rows[0][7] else "",
-        f"Longest session: “{longest['title']}” — {fmt_dur_min(longest['mins'])}."
+        f"Longest session: “{longest['title']}”, {fmt_dur_min(longest['mins'])}."
         if longest else "",
         (
-            f"Cache hit rate is {totals['cache_rate']}% — {totals['tokens_cache_read'] + totals['tokens_cache_write']:,.0f} cache tokens reused."
+            f"Cache hit rate is {totals['cache_rate']}%: {totals['tokens_cache_read'] + totals['tokens_cache_write']:,.0f} cache tokens reused."
             if totals["tokens_cache_read"] else ""
         ),
     ]
@@ -976,7 +976,7 @@ def parse_router_events(path, limit=MAX_ROUTER_EVENTS):
     Each event: {at, date, hour, model, short, provider, status, ok,
     ti, cache, to, total, ms, free, what_if}. Missing token fields on
     error rows (401/429/500) become 0 and are counted as errors, never
-    estimated — actuals only.
+    estimated, actuals only.
     """
     p = Path(path)
     try:
@@ -1072,7 +1072,7 @@ def query_router_stats(events_path, limits_path=None, worktrees=None):
     counts so the window is never silently understated.
 
     `worktrees` ([(name, path)]) feeds the tokens-per-commit panel: router
-    events carry no project info, so attribution is timestamp-only — request
+    events carry no project info, so attribution is timestamp-only. Request
     tokens in the 24h window before each commit.
     """
     try:
@@ -1083,8 +1083,8 @@ def query_router_stats(events_path, limits_path=None, worktrees=None):
     truncated = total_lines > MAX_ROUTER_EVENTS
     scanned_events = parse_router_events(events_path, MAX_ROUTER_EVENTS)
     # Successful responses that carried no token fields (local/unmetered
-    # models, image calls) are excluded from every count and average —
-    # never estimated — and reported separately as `unmetered`.
+    # models, image calls) are excluded from every count and average,
+    # never estimated, and reported separately as `unmetered`.
     unmetered = sum(1 for e in scanned_events if e["ok"] and not e["total"])
     events = [e for e in scanned_events if not e["ok"] or e["total"]]
     ok_events = [e for e in events if e["ok"]]
@@ -1244,27 +1244,27 @@ def query_router_stats(events_path, limits_path=None, worktrees=None):
     biggest_req = max(ok_events, key=lambda e: e["total"]) if ok_events else None
     peak_hour = max(range(24), key=lambda h: hour_tokens.get(h, 0)) if any(hour_tokens.values()) else None
     insights = [
-        f"Codex made {len(events):,} requests across {len(by_model)} models — {len(ok_events):,} ok, {len(err_events):,} errors.",
-        (f"Top model: {router_short(top_model[0])} — {top_model[2]:,.0f} tokens over {top_model[1]:,} requests."
+        f"Codex made {len(events):,} requests across {len(by_model)} models: {len(ok_events):,} ok, {len(err_events):,} errors.",
+        (f"Top model: {router_short(top_model[0])}, {top_model[2]:,.0f} tokens over {top_model[1]:,} requests."
          if top_model else ""),
-        (f"Busiest day: {biggest_day['date']} — {biggest_day['total']:,.0f} tokens, {biggest_day['reqs']} requests."
+        (f"Busiest day: {biggest_day['date']}, {biggest_day['total']:,.0f} tokens, {biggest_day['reqs']} requests."
          if biggest_day else "No Codex activity recorded yet."),
     ]
     if err429:
-        insights.append(f"{err429} requests hit 429 rate limits — usually free-model capacity, not token size.")
+        insights.append(f"{err429} requests hit 429 rate limits, usually free-model capacity, not token size.")
     if unmetered:
         insights.append(
             f"{unmetered:,} successful requests reported no token counts "
-            f"(local / unmetered models) — excluded from all counts and averages."
+            f"(local / unmetered models), excluded from all counts and averages."
         )
     if free_unpriced:
         insights.append(
             f"What-if paid ${what_if:.2f} covers only models with known pricing "
-            f"(muse-spark) — {free_unpriced:,} other free-model requests have no rate on file."
+            f"(muse-spark). {free_unpriced:,} other free-model requests have no rate on file."
         )
     if truncated:
         insights.append(
-            f"Showing the most recent {len(scanned_events):,} of {total_lines:,} events — "
+            f"Showing the most recent {len(scanned_events):,} of {total_lines:,} events: "
             f"totals cover the scanned window only."
         )
     insights = [i for i in insights if i]
@@ -1366,7 +1366,7 @@ def cached_router_stats(events_path, limits_path=None, worktrees=None):
 
 
 def session_prompts(con, session_id):
-    """Prompts for one session — from session_input when available, otherwise
+    """Prompts for one session: from session_input when available, otherwise
     reconstructed from user text parts (older opencode versions)."""
     rows = [
         {"t": r["time_created"], "p": r["prompt"]}
@@ -2797,8 +2797,8 @@ function renderRouter(){
       '<span class=\'trow\'><span>Input / Cached / Output</span><b>'+FN(ti)+' / '+FN(ca)+' / '+FN(out)+'</b></span>'+
       (RSPLIT?'<span class=\'trow\'><span>Reasoning</span><b>'+FN(tr)+'</b></span>':'')+
       '<span class=\'trow\'><span>Provider</span><b>'+ESC(prov)+'</b></span>'+
-      ((!tot&&ok)?'<span class=\'trow\'><span>Note</span><b>unmetered — 0 tokens reported</b></span>':'')+
-      ((free&&!wi)?'<span class=\'trow\'><span>Pricing</span><b>no rate on file — excluded from what-if</b></span>':'')+
+      ((!tot&&ok)?'<span class=\'trow\'><span>Note</span><b>unmetered, 0 tokens reported</b></span>':'')+
+      ((free&&!wi)?'<span class=\'trow\'><span>Pricing</span><b>no rate on file, excluded from what-if</b></span>':'')+
       (free?'<span class=\'trow\'><span>What-if paid</span><b>$'+Number(wi).toFixed(4)+'</b></span>':''));
     return '<div class="model-row clickable'+(RFSTATE.model===name?' active':'')+'" data-rm="'+ESC(name)+'" data-tip="'+tipH+'">'+
       '<div><div class="mn">'+ESC(rModelShort(name))+(free?'<span class="free-tag">free</span>':'')+'</div><div class="ms">'+reqs+' req · '+(tot/totalAll*100).toFixed(1)+'% · '+ESC(prov)+'</div></div>'+
