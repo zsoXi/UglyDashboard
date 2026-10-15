@@ -116,11 +116,11 @@ const HTML_ESCAPES = {
 /** @param {unknown} x @returns {string} */
 const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c);
 /** @param {number | null | undefined} n @returns {string} */
-const fmt = (n) => (n == null ? '—' : formatNumber(n, { maximumFractionDigits: 0 }));
+const fmt = (n) => (n == null ? '-' : formatNumber(n, { maximumFractionDigits: 0 }));
 /** @param {number | null | undefined} n @returns {string} */
 const compact = (n) =>
   n == null
-    ? '—'
+    ? '-'
     : n >= 1e6
       ? (n / 1e6).toFixed(2) + 'M'
       : n >= 1e3
@@ -143,14 +143,14 @@ const ago = (ts) => {
 /** @param {number | null | undefined} s @returns {string} */
 const duration = (s) =>
   s == null
-    ? '—'
+    ? '-'
     : s >= 3600
       ? t('duration.hours', { n: (s / 3600).toFixed(1) })
       : s >= 60
         ? t('duration.minutes', { n: Math.round(s / 60) })
         : t('duration.seconds', { n: Math.round(s) });
 /** @param {number | null | undefined} n @returns {string} */
-const money = (n) => (n == null ? '—' : formatMoney(n));
+const money = (n) => (n == null ? '-' : formatMoney(n));
 /** @param {SessionSummary} s @returns {boolean} */
 const active = (s) => ['running', 'tool', 'thinking'].includes(s.state);
 /** @param {unknown} x @param {string} [cls] @returns {string} */
@@ -390,7 +390,7 @@ function coverageNotice(cov, windowLimit) {
     const fromScope =
       c.scope && typeof c.scope.window_limit === 'number' ? c.scope.window_limit : null;
     const limit = fromScope ?? (typeof windowLimit === 'number' ? windowLimit : null);
-    lines.push(t('coverage.history_limited', { limit: limit === null ? '—' : fmt(limit) }));
+    lines.push(t('coverage.history_limited', { limit: limit === null ? '-' : fmt(limit) }));
   }
   if (names.length) lines.push(t('coverage.breakdowns_partial', { names: names.join(', ') }));
   if (c.detail_events_evicted) lines.push(t('coverage.evicted', { n: c.detail_events_evicted }));
@@ -581,7 +581,7 @@ function sessionTable(rows, max = 200) {
           esc(s.last_tool || s.relationship) +
           '</div></td>' +
           '<td class="right num">' +
-          (s.usage_known ? compact(s.usage.total) : '—') +
+          (s.usage_known ? compact(s.usage.total) : '-') +
           '</td>' +
           '<td class="num">' +
           esc(ago(s.updated)) +
@@ -615,7 +615,7 @@ function agentCard(s) {
     '</div><div class="cardfoot"><span>' +
     esc(s.project) +
     '</span><span>' +
-    (s.usage_known ? compact(s.usage.total) : '—') +
+    (s.usage_known ? compact(s.usage.total) : '-') +
     ' ' +
     esc(t('card.tokens_suffix')) +
     '</span></div></article>'
@@ -1054,7 +1054,7 @@ function projectRows(sessions) {
   const groups = new Map();
   sessions.forEach((s) => {
     const key = s.directory || '';
-    const row = groups.get(key) || { name: s.project || key || '—', sessions: 0, tokens: 0 };
+    const row = groups.get(key) || { name: s.project || key || '-', sessions: 0, tokens: 0 };
     row.sessions += 1;
     row.tokens += s.usage?.total || 0;
     groups.set(key, row);
@@ -1194,10 +1194,10 @@ async function loadAnalytics(seq = renderSeq) {
             compact(m.tokens_per_session) +
             '</td><td class="right num">' +
             (m.test_pass_rate == null
-              ? '—'
+              ? '-'
               : Math.round(m.test_pass_rate * 100) + '% / ' + m.test_samples) +
             '</td><td class="right num">' +
-            (m.avg_review_fixes == null ? '—' : m.avg_review_fixes.toFixed(1)) +
+            (m.avg_review_fixes == null ? '-' : m.avg_review_fixes.toFixed(1)) +
             '</td><td class="right num">' +
             duration(m.avg_duration_seconds) +
             '</td><td class="right num">' +

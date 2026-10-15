@@ -40,7 +40,7 @@ różnicę:
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `02b96c084677c344` | 6981 | 4000 | 279 421 550 | 108 309 355 | **171 112 195** |
 | `a1d38b47a9df83a0` | 4356 | 4000 | 110 606 301 | 107 109 078 | 3 497 223 |
-| pozostałe 158 sesji | ≤ 4000 | pełne | — | — | 0,0 |
+| pozostałe 158 sesji | ≤ 4000 | pełne | - | - | 0,0 |
 
 Pokrycie raportowane przez czytnik: `truncated_sessions = 2`,
 `parts_loaded = 62 864` z `66 201` (`truncated = true`).

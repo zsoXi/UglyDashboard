@@ -174,7 +174,7 @@ def compute_streaks(activity, tokens_only=False):
 
 def parse_model(raw):
     if not raw:
-        return "—"
+        return "-"
     try:
         return json.loads(raw).get("id", raw)
     except (ValueError, AttributeError):
@@ -183,7 +183,7 @@ def parse_model(raw):
 
 def short_dir(path):
     if not path:
-        return "—"
+        return "-"
     parts = [p for p in path.split("/") if p]
     if len(parts) > 2:
         return "/".join(parts[-2:])
@@ -609,7 +609,7 @@ def query_stats(con):
                    +COALESCE(tokens_cache_write,0) AS tot
            FROM session"""
     ):
-        nm, wt = pid_info.get(r["project_id"], ("—", ""))
+        nm, wt = pid_info.get(r["project_id"], ("-", ""))
         sess_all[r["id"]] = (r["tot"] or 0, r["time_updated"] or 0, nm, wt)
 
     # Changed files from edit/write tool parts: distinct filePaths per session.
@@ -751,7 +751,7 @@ def query_stats(con):
     streaks = compute_streaks(activity)
     busiest = biggest_day["date"] if biggest_day else None
     top_model = sorted(models.items(), key=lambda kv: -(kv[1]["ti"] + kv[1]["to"] + kv[1]["tr"] + kv[1]["cache"]))[0] if models else None
-    top_agent = sorted(agents.items(), key=lambda kv: -kv[1]["n"])[0] if agents else ("—", {"n": 0})
+    top_agent = sorted(agents.items(), key=lambda kv: -kv[1]["n"])[0] if agents else ("-", {"n": 0})
     longest = con.execute(
         """
         SELECT title, (time_updated-time_created)/60000.0 AS mins FROM session
@@ -937,7 +937,7 @@ def cached_local_stats(db_path):
 def router_short(model):
     """Short display name: last path segment, e.g. 'a/b' -> 'b'."""
     if not model:
-        return "—"
+        return "-"
     return str(model).split("/")[-1] or str(model)
 
 
@@ -997,7 +997,7 @@ def parse_router_events(path, limit=MAX_ROUTER_EVENTS):
             continue
         if not isinstance(e, dict):
             continue
-        model = e.get("model") or "—"
+        model = e.get("model") or "-"
         short = router_short(model)
         try:
             status = int(e.get("status", 0))
@@ -1022,7 +1022,7 @@ def parse_router_events(path, limit=MAX_ROUTER_EVENTS):
                 "hour": hour,
                 "model": str(model),
                 "short": short,
-                "provider": str(e.get("provider") or "—"),
+                "provider": str(e.get("provider") or "-"),
                 "status": status,
                 "ok": ok,
                 "ti": ti,
@@ -1954,9 +1954,9 @@ const BOLD=s=>{const ents=[];const t=s.replace(/&(?:#\d+|[a-z]+);/g,m=>{ents.pus
   return t.replace(/(\d[\d,]*(?:\.\d+)?)/g,'<b>$1</b>').replace(/@@[A-Z]+@@/g,m=>ents[m.charCodeAt(2)-65]);};
 const F=n=>{const s=Math.round(Number(n)||0).toString();return s.replace(/\B(?=(\d{3})+(?!\d))/g,',');};
 const FN=n=>{n=Number(n)||0;return n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':String(Math.round(n));};
-const DT=t=>{if(!t)return'—';const d=new Date(t>1e12?t:t*1000);return d.toLocaleDateString('en-CA')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');};
+const DT=t=>{if(!t)return'-';const d=new Date(t>1e12?t:t*1000);return d.toLocaleDateString('en-CA')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');};
 const DS=t=>{if(!t)return'';const d=new Date(t>1e12?t:t*1000);return d.toLocaleDateString('en-CA');};
-const DUR=m=>{if(m==null)return'—';if(m<1)return'<1m';if(m<60)return Math.round(m)+'m';const h=Math.floor(m/60);return h+'h '+Math.round(m%60)+'m';};
+const DUR=m=>{if(m==null)return'-';if(m<1)return'<1m';if(m<60)return Math.round(m)+'m';const h=Math.floor(m/60);return h+'h '+Math.round(m%60)+'m';};
 const BURN=b=>{b=Number(b)||0;return b>=1000?(b/1000).toFixed(1)+'K/m':Math.round(b)+'/m';};
 let S=null; if(typeof S0!=='undefined'&&S0){S=S0;}
 let R=null; try{if(typeof R0!=='undefined'&&R0){R=R0;}}catch(_){R=null;}
@@ -2150,7 +2150,7 @@ function renderCommitChart(){
       '<div><div class="mn">'+ESC(msg.length>44?msg.slice(0,44)+'…':msg)+'</div>'+
       '<div class="ms">'+sha.slice(0,7)+' · '+date+' · '+ESC(proj)+' · +'+F(add)+'/-'+F(del)+'</div></div>'+
       '<div class="mbar"><i style="width:'+Math.max(toks?2:0,toks/max*100).toFixed(1)+'%;background:'+t.accent2+'"></i></div>'+
-      '<div class="mv">'+(toks?FN(toks):'—')+'</div></div>';
+      '<div class="mv">'+(toks?FN(toks):'-')+'</div></div>';
   }).join('')+(rows.length>6?'<button class="more-btn" data-exp="cs">'+(CS_EXP?'Show less':'Show all '+rows.length)+' '+(CS_EXP?'▴':'▾')+'</button>':'');
 }
 /* period helpers */
@@ -2186,11 +2186,11 @@ function renderHero(){
   $('range').textContent='LOCAL · RECORDED '+S.range.toUpperCase()+' · LAST '+periodLbl+' · REFRESHES AUTOMATICALLY';
   $('headline').innerHTML=BOLD(ESC(S.insights[0]||'No activity yet.'));
   const last=[...S.sessions].sort((a,b)=>b.time_created-a.time_created)[0];
-  const ltitle=last?ESC(last.title):'—';
+  const ltitle=last?ESC(last.title):'-';
   const nModels=S.models.length;
   $('pills').innerHTML=[
     ['Total tokens',FN(S.totals.tokens_total||0)],
-    ['Models',nModels>1?nModels+' models':ESC(((S.models[0]||['—'])[0]+'').split('/').pop())],
+    ['Models',nModels>1?nModels+' models':ESC(((S.models[0]||['-'])[0]+'').split('/').pop())],
     ['Latest',ltitle.length>36?ltitle.slice(0,36)+'…':ltitle]]
     .map(([k,v])=>'<span class="pill">'+ESC(k)+' <b style="color:var(--text)">'+v+'</b></span>').join('');
 }
@@ -2241,7 +2241,7 @@ function renderKpis(){
     row('Avg tokens/session (all)',FN(t.avg_tokens_per_session||0),'var(--subtle)')+'</div>';
   const topSub=((S.subsystems||[])[0])||null;
   const burnCard='<div class="kpi"><h3>Burn &amp; activity</h3><div class="big">'+F(sessions)+' <small>sessions</small>'+actTag+'</div>'+
-    row('Messages',F(msgs),c.accent)+row('Top subsystem',topSub?ESC(topSub[0]):'—',c.accent2,'all-time')+
+    row('Messages',F(msgs),c.accent)+row('Top subsystem',topSub?ESC(topSub[0]):'-',c.accent2,'all-time')+
     row('Avg session',DUR(t.avg_duration_min),'var(--subtle)','all-time')+'</div>';
   $('kpis').innerHTML=tokCard+effCard+burnCard;
 }
@@ -2270,7 +2270,7 @@ function renderCharts(){
   renderFileChart();
   renderCommitChart();
 }
-function modelShort(m){return (m||'—').split('/').pop();}
+function modelShort(m){return (m||'-').split('/').pop();}
 function renderModels(){
   const el=$('models');if(!el)return;
   const t=T();
@@ -2501,7 +2501,7 @@ function renderFilterBar(){
   bar.querySelector('.fclear').onclick=()=>{for(const k in FSTATE)FSTATE[k]=null;$('agent-f').value='';$('model-f').value='';renderAll();};
 }
 /* ---- Codex tab (all models, from usage-events.jsonl) ---- */
-function rModelShort(m){return (m||'—').split('/').pop();}
+function rModelShort(m){return (m||'-').split('/').pop();}
 function rDayTokenTotal(d){return (d.ti||0)+(d.to||0)+(d.tr||0);}
 function rCutDate(){
   if(RRANGE==='all')return'';
@@ -2629,7 +2629,7 @@ function renderRouterCommitChart(){
       '<div><div class="mn">'+ESC(msg.length>44?msg.slice(0,44)+'…':msg)+'</div>'+
       '<div class="ms">'+sha.slice(0,7)+' · '+date+' · '+ESC(proj)+' · +'+F(add)+'/-'+F(del)+'</div></div>'+
       '<div class="mbar"><i style="width:'+Math.max(toks?2:0,toks/max*100).toFixed(1)+'%;background:'+t.accent2+'"></i></div>'+
-      '<div class="mv">'+(toks?FN(toks):'—')+'</div></div>';
+      '<div class="mv">'+(toks?FN(toks):'-')+'</div></div>';
   }).join('')+(rows.length>6?'<button class="more-btn" data-exp="rcs">'+(RCS_EXP?'Show less':'Show all '+rows.length)+' '+(RCS_EXP?'▴':'▾')+'</button>':'');
 }
 function rHumanize(n){n=Number(n)||0;const words=Math.round(n/1.3);if(words>1e6)return (words/1e6).toFixed(1)+'M words';if(words>1e3)return (words/1e3).toFixed(0)+'K words';return words+' words';}
@@ -2774,7 +2774,7 @@ function renderRouter(){
     '<div class="kpi"><h3>Burn &amp; activity</h3><div class="big">'+F(totReqs)+' <small>requests · '+okRate+'% ok</small></div>'+
     row('Errors',F(cur?cur.err:(t.errors||0)),(cur?cur.err:t.errors)?'var(--bad)':'var(--subtle)')+
     row('429s',F(cur?cur.err429:(t.err429||0)),(cur?cur.err429:(t.err429||0))?'var(--bad)':'var(--subtle)')+
-    row('Top commit',topCommit?ESC((topCommit[1]||'').slice(0,30)):'—',c.accent2,'all-time')+
+    row('Top commit',topCommit?ESC((topCommit[1]||'').slice(0,30)):'-',c.accent2,'all-time')+
     row('Avg latency',F(t.avg_ms||0)+' ms','var(--subtle)','ok-only · all-time')+'</div>';
   renderRouterRecords(R,totTokens);
   const d=rPeriodDays();

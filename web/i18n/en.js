@@ -9,7 +9,7 @@ export const EN = {
   'skip.link': 'Skip to content',
   'brand.name': 'ugly.dashboard',
   'brand.sub': 'MISSION CONTROL',
-  'brand.aria': 'UglyDashboard — overview',
+  'brand.aria': 'UglyDashboard - overview',
   'nav.aria': 'Main navigation',
   'nav.section.operations': 'OPERATIONS',
   'nav.operations.aria': 'Operations',

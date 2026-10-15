@@ -10,8 +10,8 @@ jako `%USERPROFILE%`. Nie kopiuj ich do repo.
 | --- | --- | --- | --- |
 | v5 (produkcja, działająca) | `<ścieżka do checkoutu v5>` | `fix/mission-control-v5-hardening-ui` @ `5685080` | instancja na porcie 8765 (PID może się zmienić) |
 | V6 (ukończone E.4) | `<ścieżka do worktree V6>` (git worktree) | `feat/mission-control-v6` @ commit E.4 | port testowy 8780, osobny katalog stanu |
-| Dashboard porównawczy | `<ścieżka do dashboardu porównawczego>` | — | port 8770; NIE modyfikować |
-| Raport odniesienia | `<ścieżka do raportu odniesienia>` | — | nie był źródłem procesu na 8770 |
+| Dashboard porównawczy | `<ścieżka do dashboardu porównawczego>` | - | port 8770; NIE modyfikować |
+| Raport odniesienia | `<ścieżka do raportu odniesienia>` | - | nie był źródłem procesu na 8770 |
 
 Repo: `https://github.com/zsoXi/UglyDashboard`
 

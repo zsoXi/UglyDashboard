@@ -8,7 +8,7 @@ export const PL = {
   'skip.link': 'Przejdź do zawartości',
   'brand.name': 'ugly.dashboard',
   'brand.sub': 'MISSION CONTROL',
-  'brand.aria': 'UglyDashboard — przegląd',
+  'brand.aria': 'UglyDashboard - przegląd',
   'nav.aria': 'Nawigacja główna',
   'nav.section.operations': 'OPERACJE',
   'nav.operations.aria': 'Operacje',
